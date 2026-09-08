@@ -1,0 +1,164 @@
+{
+  "uid": "metacritic-game-tracker-overview",
+  "title": "Metacritic Game Tracker",
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    { "id": 1, "type": "text", "title": "", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## Здоровье сервиса" } },
+
+    { "id": 2, "type": "timeseries", "title": "Ошибки (ERROR) за 5 мин",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 1, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum(rate({project=\"metacritic-game-tracker\"} |= \"| ERROR |\" [5m]))", "refId": "A" }] },
+
+    { "id": 3, "type": "stat", "title": "Unhandled exceptions (1ч)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"Traceback\" [1h]))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute",
+        "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 } ] } } } },
+
+    { "id": 4, "type": "stat", "title": "WARNING за час",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "targets": [{ "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"| WARNING |\" [1h]))", "refId": "A" }] },
+
+    { "id": 5, "type": "logs", "title": "Последние ошибки",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 4 },
+      "options": { "sortOrder": "Descending" },
+      "targets": [{ "expr": "{project=\"metacritic-game-tracker\"} |= \"| ERROR |\"", "refId": "A" }] },
+
+    { "id": 6, "type": "text", "title": "", "gridPos": { "x": 0, "y": 9, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## LLM-расходы (резюме отзывов, заключения по летсплеям)" } },
+
+    { "id": 7, "type": "stat", "title": "Расход сегодня",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 0, "y": 10, "w": 6, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(sum(cost_usd),0) AS value FROM llm_calls WHERE created_at >= date_trunc('day', now())", "refId": "A" }] },
+
+    { "id": 8, "type": "stat", "title": "Расход за 7д",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 6, "y": 10, "w": 6, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(sum(cost_usd),0) AS value FROM llm_calls WHERE created_at >= now() - interval '7 days'", "refId": "A" }] },
+
+    { "id": 9, "type": "stat", "title": "Расход за 30д",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 12, "y": 10, "w": 6, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(sum(cost_usd),0) AS value FROM llm_calls WHERE created_at >= now() - interval '30 days'", "refId": "A" }] },
+
+    { "id": 10, "type": "stat", "title": "Расход всего",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 18, "y": 10, "w": 6, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(sum(cost_usd),0) AS value FROM llm_calls", "refId": "A" }] },
+
+    { "id": 11, "type": "timeseries", "title": "Расходы по дням, по типу вызова",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT date_trunc('day', created_at) AS time, call_type AS metric, sum(cost_usd) AS cost FROM llm_calls WHERE $__timeFilter(created_at) GROUP BY 1, 2 ORDER BY 1", "refId": "A" }] },
+
+    { "id": 12, "type": "table", "title": "Все вызовы по моделям",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT model, count(*) AS calls, sum(cost_usd) AS cost_usd, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM llm_calls WHERE $__timeFilter(created_at) GROUP BY model ORDER BY cost_usd DESC", "refId": "A" }] },
+
+    { "id": 13, "type": "table", "title": "Breakdown по типу вызова",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT call_type, status, count(*) AS calls, sum(cost_usd) AS cost_usd FROM llm_calls WHERE $__timeFilter(created_at) GROUP BY call_type, status ORDER BY call_type", "refId": "A" }] },
+
+    { "id": 14, "type": "text", "title": "", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## Данные / интеграции" } },
+
+    { "id": 15, "type": "timeseries", "title": "Ошибки скрейпинга Metacritic",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 31, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum(rate({project=\"metacritic-game-tracker\"} |= \"scrape\" |= \"| ERROR |\" [5m]))", "refId": "A" }] },
+
+    { "id": 16, "type": "piechart", "title": "Типы ошибок интеграций",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"metacritic\" |= \"| ERROR |\" [24h]))", "legendFormat": "Metacritic", "refId": "A" },
+        { "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"youtube\" |= \"| ERROR |\" [24h]))", "legendFormat": "YouTube", "refId": "B" },
+        { "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"llm\" |= \"| ERROR |\" [24h]))", "legendFormat": "LLM", "refId": "C" }
+      ] },
+
+    { "id": 17, "type": "text", "title": "", "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## Безопасность" } },
+
+    { "id": 18, "type": "stat", "title": "GuardrailViolation за час",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 40, "w": 6, "h": 4 },
+      "description": "guardrail.py ещё не подключён к application-слою — панель заранее, заполнится когда появится реальный вызов sanitize_input().",
+      "targets": [{ "expr": "sum(count_over_time({project=\"metacritic-game-tracker\"} |= \"GuardrailViolation\" [1h]))", "refId": "A" }] },
+
+    { "id": 19, "type": "logs", "title": "Последние guardrail-события",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 6, "y": 40, "w": 18, "h": 4 },
+      "options": { "sortOrder": "Descending" },
+      "targets": [{ "expr": "{project=\"metacritic-game-tracker\"} |= \"GuardrailViolation\"", "refId": "A" }] },
+
+    { "id": 20, "type": "text", "title": "", "gridPos": { "x": 0, "y": 44, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## Качество пайплайна (hourly ingest)" } },
+
+    { "id": 21, "type": "table", "title": "Воронка по стадиям и прогонам",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "description": "pipeline_runs пока пуст — заполнится с реализацией ingest-джобы (см. specs/001-metacritic-game-tracker/spec.md).",
+      "gridPos": { "x": 0, "y": 45, "w": 24, "h": 8 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT stage, source, sum(items_in) AS in_total, sum(items_accepted) AS accepted, sum(items_rejected) AS rejected, sum(items_deferred) AS deferred, sum(items_errored) AS errored FROM pipeline_runs WHERE $__timeFilter(started_at) GROUP BY stage, source ORDER BY stage", "refId": "A" }] },
+
+    { "id": 22, "type": "table", "title": "Причины отсева",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 0, "y": 53, "w": 12, "h": 8 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT stage, reason_code, count(*) AS occurrences FROM pipeline_rejects WHERE $__timeFilter(created_at) GROUP BY stage, reason_code ORDER BY occurrences DESC", "refId": "A" }] },
+
+    { "id": 23, "type": "stat", "title": "Прогонов failed за 24ч",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 12, "y": 53, "w": 6, "h": 4 },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute",
+        "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT count(*) AS value FROM pipeline_runs WHERE status = 'failed' AND started_at >= now() - interval '24 hours'", "refId": "A" }] },
+
+    { "id": 24, "type": "stat", "title": "Часов с последнего успешного прогона ingest",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "description": "Порог алерта ставить только после сбора базовой линии — планово раз в час, так что >2ч уже подозрительно, но это не откалибровано.",
+      "gridPos": { "x": 18, "y": 53, "w": 6, "h": 4 },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT EXTRACT(EPOCH FROM (now() - max(finished_at)))/3600 AS value FROM pipeline_runs WHERE stage = 'ingest' AND status = 'completed'", "refId": "A" }] },
+
+    { "id": 25, "type": "timeseries", "title": "Доля исходов по прогонам (accepted/rejected/deferred/errored)",
+      "datasource": { "type": "postgres", "uid": "metacritic-game-tracker-postgres" },
+      "gridPos": { "x": 0, "y": 61, "w": 24, "h": 8 },
+      "fieldConfig": { "defaults": { "custom": { "stacking": { "mode": "percent" } } } },
+      "targets": [{ "format": "table", "rawQuery": true,
+        "rawSql": "SELECT started_at AS time, stage || '/accepted' AS metric, items_accepted AS value FROM pipeline_runs WHERE $__timeFilter(started_at) UNION ALL SELECT started_at, stage || '/rejected', items_rejected FROM pipeline_runs WHERE $__timeFilter(started_at) UNION ALL SELECT started_at, stage || '/deferred', items_deferred FROM pipeline_runs WHERE $__timeFilter(started_at) UNION ALL SELECT started_at, stage || '/errored', items_errored FROM pipeline_runs WHERE $__timeFilter(started_at) ORDER BY 1", "refId": "A" }] },
+
+    { "id": 26, "type": "text", "title": "", "gridPos": { "x": 0, "y": 69, "w": 24, "h": 1 },
+      "options": { "mode": "markdown", "content": "## Все логи (live)" } },
+
+    { "id": 27, "type": "logs", "title": "Live",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 70, "w": 24, "h": 10 },
+      "options": { "sortOrder": "Descending" },
+      "targets": [{ "expr": "{project=\"metacritic-game-tracker\"}", "refId": "A" }] }
+  ]
+}

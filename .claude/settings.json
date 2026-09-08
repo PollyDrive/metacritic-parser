@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(poetry run pytest*)",
+      "Bash(poetry run ruff*)",
+      "Bash(poetry run tach*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/test_guard.py",
+            "asyncRewake": true,
+            "statusMessage": "Running tests..."
+          }
+        ]
+      }
+    ]
+  }
+}

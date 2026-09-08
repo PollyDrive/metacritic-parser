@@ -1,0 +1,46 @@
+# Секреты — никогда не коммитить
+.env
+.env.local
+.env.prod
+*.pem
+*.key
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+
+# Poetry
+.poetry-cache/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+.DS_Store
+
+# Данные
+*.db
+*.sqlite
+backups/
+logs/
+
+# Claude Code — личные настройки и авто-установленные скиллы не коммитятся
+.claude/settings.local.json
+.claude/skills/
+mcp-servers.json
+
+# Spec-kit — Copilot-зеркало skill'ов (не используем Copilot), regenerable через `specify init`
+.github/skills/
+
+# Spec-kit — machine-local state (см. .specify/.gitignore)
+.specify/feature.json

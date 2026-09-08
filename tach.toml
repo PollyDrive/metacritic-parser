@@ -1,0 +1,24 @@
+source_roots = ["."]
+
+[[modules]]
+path = "metacritic_game_tracker.domain"
+depends_on = []
+
+[[modules]]
+path = "metacritic_game_tracker.shared"
+depends_on = []
+
+[[modules]]
+path = "metacritic_game_tracker.infrastructure"
+depends_on = [
+    { path = "metacritic_game_tracker.domain" },
+    { path = "metacritic_game_tracker.shared" },
+]
+
+[[modules]]
+path = "metacritic_game_tracker.application"
+depends_on = [
+    { path = "metacritic_game_tracker.domain" },
+    { path = "metacritic_game_tracker.shared" },
+    { path = "metacritic_game_tracker.infrastructure" },
+]
