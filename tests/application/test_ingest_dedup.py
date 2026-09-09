@@ -127,6 +127,33 @@ async def test_a_review_summarization_failure_does_not_abort_the_whole_run(monke
     game_repo.upsert.assert_awaited_once()
 
 
+async def test_run_updates_current_item_in_meta_as_it_processes_each_game(monkeypatch):
+    """Same live-progress signal as BackfillEnrichmentUseCase — the monitoring
+    page shows which game a manual ingest run is currently processing."""
+    parsed = _parsed(1)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.build_parsed_game", lambda resolved: parsed)
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.parse_reviews", lambda html, sample_size: ["quote"])
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    summarize = AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m"))
+    use_case, session = _use_case(
+        game_repo, _ingest_state_repo(), fetch_detail=AsyncMock(return_value=_GAME_HTML), summarize=summarize
+    )
+
+    run_row = await use_case.run()
+
+    assert run_row.meta["current_item"] == "Game 1"
+    assert session.commit.await_count >= 2  # initial "running" + at least one per item
+
+
 async def test_enrichment_is_skipped_for_an_already_enriched_existing_game(monkeypatch):
     """FR-024: re-ingesting an already-enriched game triggers zero LLM calls."""
     parsed = _parsed(1)

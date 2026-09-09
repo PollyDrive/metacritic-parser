@@ -16,9 +16,12 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+import json
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Metacritic Game Tracker")
     app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    app.state.templates.env.filters["fromjson"] = json.loads
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(catalog_router)
     app.include_router(monitoring_router)

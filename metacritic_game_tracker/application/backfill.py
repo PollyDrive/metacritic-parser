@@ -143,17 +143,30 @@ class BackfillEnrichmentUseCase:
 
         items_in = 0
         items_accepted = 0
+        items_deferred = 0
+        items_rejected = 0
         for step in steps:
             for game, attempt in await self._games_missing(step):
                 items_in += 1
+                # Committed per item (not only in the batch's final commit) so a
+                # concurrent viewer — the monitoring page's SSE poll — can show
+                # which game a manual run is currently processing.
+                run_row.meta = {"current_item": game.title}
+                await self._session.commit()
                 outcome = await self.process_game_step(
                     game, step, attempt, do_work=lambda g, s=step: do_work_for_step(s, g)
                 )
                 if outcome.status == "succeeded":
                     items_accepted += 1
+                elif outcome.status == "retrying":
+                    items_deferred += 1
+                elif outcome.status == "abandoned":
+                    items_rejected += 1
 
         run_row.status = "completed"
         run_row.finished_at = datetime.now(UTC)
         run_row.items_in = items_in
         run_row.items_accepted = items_accepted
+        run_row.items_deferred = items_deferred
+        run_row.items_rejected = items_rejected
         return run_row

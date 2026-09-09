@@ -21,7 +21,7 @@ import asyncio
 
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import CouldNotRetrieveTranscript
+from youtube_transcript_api._errors import CouldNotRetrieveTranscript, NoTranscriptFound
 
 from metacritic_game_tracker.infrastructure.alerting.email import send_alert_email
 from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import VideoCandidate
@@ -74,9 +74,26 @@ async def search_videos(
     ]
 
 
+def _find_english_transcript(video_id: str):
+    """`en`/`en-US` (manual, then generated) first; if the video only has
+    captions in another language, fall back to that language's own
+    translation into English when it offers one (its TRANSLATION LANGUAGES
+    list includes "en")."""
+    transcript_list = YouTubeTranscriptApi().list(video_id)
+    try:
+        return transcript_list.find_transcript(["en", "en-US"])
+    except NoTranscriptFound:
+        for transcript in transcript_list:
+            if transcript.is_translatable and any(
+                lang.language_code == "en" for lang in transcript.translation_languages
+            ):
+                return transcript.translate("en")
+        raise
+
+
 def _fetch_transcript_sync(video_id: str) -> str | None:
     try:
-        transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en"])
+        transcript = _find_english_transcript(video_id).fetch()
     except CouldNotRetrieveTranscript as exc:
         send_alert_email(
             "No transcript available for playthrough video",

@@ -31,14 +31,22 @@ async def list_games(
     platform: str | None = None,
     q: str | None = None,
     sort: str | None = "rating",
+    page: int = 1,
     use_case=Depends(get_catalog_use_case),
 ):
-    games = await use_case.list_games(platform=platform, q=q, sort=sort)
+    paginated = await use_case.list_games(platform=platform, q=q, sort=sort, page=page, page_size=24)
     platforms = await use_case.list_platforms()
     return request.app.state.templates.TemplateResponse(
         request,
         "list.html",
-        {"games": games, "platforms": platforms, "platform": platform, "q": q, "sort": sort},
+        {
+            "games": paginated.games,
+            "paginated": paginated,
+            "platforms": platforms,
+            "platform": platform,
+            "q": q,
+            "sort": sort,
+        },
     )
 
 

@@ -31,7 +31,7 @@ ALLOWED_POLL_INTERVALS_SECONDS = {5, 30, 60, 300}
 
 KNOWN_KINDS = ("ingest", "review_refresh", "playthrough")
 
-RunState = tuple[int, str, str]
+RunState = tuple[int, str, str, str | None]
 
 _TZ_DISPLAY = timezone(timedelta(hours=8))
 
@@ -63,8 +63,8 @@ def _stage_events(
     for stage, state in latest_by_stage.items():
         if last_seen_by_stage.get(stage) != state:
             updated[stage] = state
-            run_id, status, _ = state
-            payload = {"id": run_id, "stage": stage, "status": status}
+            run_id, status, _, current_item = state
+            payload = {"id": run_id, "stage": stage, "status": status, "current_item": current_item}
             lines.append(f"data: {json.dumps(payload)}\n\n")
     return lines, updated
 
@@ -85,6 +85,8 @@ def _format_run(r: PipelineRunORM) -> dict:
         "items_in": r.items_in,
         "items_accepted": r.items_accepted,
         "items_rejected": r.items_rejected,
+        "error_message": r.error_message,
+        "current_item": (r.meta or {}).get("current_item"),
     }
 
 
@@ -103,13 +105,46 @@ async def monitoring_status(
     latest_by_stage = {r.stage: _format_run(r) for r in latest_result.scalars().all()}
     pipelines = [{"kind": kind, "latest": latest_by_stage.get(kind)} for kind in KNOWN_KINDS]
 
+    from metacritic_game_tracker.infrastructure.db.models import PipelineRejectORM, EnrichmentAttemptORM
+
     history_result = await session.execute(
         select(PipelineRunORM).order_by(PipelineRunORM.started_at.desc()).limit(20)
     )
     runs = [_format_run(r) for r in history_result.scalars().all()]
 
+    rejects_result = await session.execute(
+        select(PipelineRejectORM).order_by(PipelineRejectORM.created_at.desc()).limit(50)
+    )
+    attempts_result = await session.execute(
+        select(EnrichmentAttemptORM)
+        .where(EnrichmentAttemptORM.last_error.is_not(None))
+        .order_by(EnrichmentAttemptORM.last_attempt_at.desc())
+        .limit(50)
+    )
+    
+    error_log = []
+    for r in rejects_result.scalars().all():
+        error_log.append({
+            "timestamp": r.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
+            "sort_time": r.created_at,
+            "pipeline": r.stage,
+            "item_ref": r.item_ref,
+            "error_message": f"[{r.reason_code}] {r.reason_detail or ''}"
+        })
+    for a in attempts_result.scalars().all():
+        error_log.append({
+            "timestamp": a.last_attempt_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
+            "sort_time": a.last_attempt_at,
+            "pipeline": a.step,
+            "item_ref": f"Game ID {a.game_id}",
+            "error_message": a.last_error or ""
+        })
+        
+    error_log.sort(key=lambda x: x["sort_time"], reverse=True)
+    error_log = error_log[:50]
+
     return request.app.state.templates.TemplateResponse(
-        request, "monitoring.html", {"runs": runs, "pipelines": pipelines}
+        request, "monitoring.html", {"runs": runs, "pipelines": pipelines, "error_log": error_log}
     )
 
 
@@ -130,7 +165,10 @@ async def monitoring_stream(
         )
         while True:
             result = await session.execute(stmt)
-            latest_by_stage = {r.stage: (r.id, r.status, r.stage) for r in result.scalars().all()}
+            latest_by_stage = {
+                r.stage: (r.id, r.status, r.stage, (r.meta or {}).get("current_item"))
+                for r in result.scalars().all()
+            }
             lines, last_seen = _stage_events(latest_by_stage, last_seen)
             for line in lines:
                 yield line
@@ -154,16 +192,24 @@ async def trigger_run(
             raise HTTPException(status_code=409, detail="Playthrough enrichment is disabled")
 
     running = await session.execute(
-        select(PipelineRunORM.id).where(PipelineRunORM.stage == kind, PipelineRunORM.status == "running")
+        select(PipelineRunORM).where(PipelineRunORM.status == "running")
     )
-    if running.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail=f"A {kind} run is already in progress")
+    running_row = running.scalars().first()
+    if running_row is not None:
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Wait for the current {running_row.stage} pipeline to finish before starting a new one."
+        )
 
     pending = await session.execute(
-        select(RunRequestORM.id).where(RunRequestORM.kind == kind, RunRequestORM.picked_up_at.is_(None))
+        select(RunRequestORM).where(RunRequestORM.picked_up_at.is_(None))
     )
-    if pending.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail=f"A {kind} run request is already pending")
+    pending_row = pending.scalars().first()
+    if pending_row is not None:
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Wait for the pending {pending_row.kind} pipeline request to be processed."
+        )
 
     request_row = RunRequestORM(requested_at=datetime.now(UTC), kind=kind)
     session.add(request_row)

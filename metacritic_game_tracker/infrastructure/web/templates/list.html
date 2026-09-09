@@ -51,22 +51,73 @@
           {% endif %}
         </a>
         <a class="title" href="/games/{{ game.id }}">{{ game.title }}</a>
-        <div class="scores-row">
+        <div class="overall-scores">
+          {% set cr_scores = game.platform_scores | map(attribute='metascore') | reject('none') | list %}
+          {% set overall_cr = cr_scores | max if cr_scores else none %}
+          {% set overall_ur = game.platform_scores[0].userscore if game.platform_scores else none %}
+          
+          <div class="score-block critic">
+            <span class="score-label">CR</span>
+            <span class="score-value {% if overall_cr is not none %}{{ 'score--good' if overall_cr >= 75 else 'score--mixed' if overall_cr >= 50 else 'score--bad' }}{% else %}score--unknown{% endif %}">
+              {{ overall_cr if overall_cr is not none else 'tbd' }}
+            </span>
+          </div>
+          <div class="score-block user">
+            <span class="score-label">UR</span>
+            <span class="score-value {% if overall_ur is not none %}{{ 'score--good' if overall_ur >= 7.5 else 'score--mixed' if overall_ur >= 5.0 else 'score--bad' }}{% else %}score--unknown{% endif %}">
+              {{ overall_ur if overall_ur is not none else 'tbd' }}
+            </span>
+          </div>
+        </div>
+        
+        <div class="platform-pills">
           {% for ps in game.platform_scores %}
-            {% if ps.metascore is not none %}
-              <span class="metascore {{ 'metascore--good' if ps.metascore >= 75 else 'metascore--mixed' if ps.metascore >= 50 else 'metascore--bad' }}">{{ ps.metascore }}</span>
-            {% else %}
-              <span class="metascore metascore--unknown">tbd</span>
-            {% endif %}
-            <span class="platform">{{ ps.platform }}</span>
+            <span class="platform-pill">
+              {% if ps.metascore is not none %}
+                <span class="pill-score {{ 'score--good' if ps.metascore >= 75 else 'score--mixed' if ps.metascore >= 50 else 'score--bad' }}">{{ ps.metascore }}</span>
+              {% endif %}
+              <span class="pill-name">{{ ps.platform }}</span>
+            </span>
           {% endfor %}
         </div>
+        {% if game.review_summaries %}
+        <div class="badges-row">
+          {% for summary in game.review_summaries|sort(attribute='audience') %}
+            <span class="review-badge {{ summary.audience }}">{{ "CR" if summary.audience == "critic" else "UR" }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
       </li>
       {% endfor %}
-    </ul>
-    {% else %}
-    <p class="empty-state">No games in the catalog yet.</p>
-    {% endif %}
-  </main>
-</body>
+      </ul>
+      {% else %}
+        <div class="empty-state">
+          No games found.
+        </div>
+      {% endif %}
+      
+      {% if paginated and paginated.total_pages > 1 %}
+      <div class="pagination">
+        {% set base_url = '/games?sort=' ~ (sort or 'rating') %}
+        {% set base_url = base_url ~ ('&platform=' ~ platform if platform else '') %}
+        {% set base_url = base_url ~ ('&q=' ~ q if q else '') %}
+        
+        {% if paginated.current_page > 1 %}
+          <a class="page-btn" href="{{ base_url }}&page={{ paginated.current_page - 1 }}">&larr; Previous</a>
+        {% else %}
+          <span class="page-btn disabled">&larr; Previous</span>
+        {% endif %}
+        
+        <span class="page-info">Page {{ paginated.current_page }} of {{ paginated.total_pages }}</span>
+        
+        {% if paginated.current_page < paginated.total_pages %}
+          <a class="page-btn" href="{{ base_url }}&page={{ paginated.current_page + 1 }}">Next &rarr;</a>
+        {% else %}
+          <span class="page-btn disabled">Next &rarr;</span>
+        {% endif %}
+      </div>
+      {% endif %}
+      
+    </main>
+  </body>
 </html>

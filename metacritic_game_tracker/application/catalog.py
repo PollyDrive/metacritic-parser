@@ -13,14 +13,36 @@ class GameDetail:
     similar_games: list[GameORM]
 
 
+@dataclass(frozen=True)
+class PaginatedGames:
+    games: list[GameORM]
+    total_count: int
+    total_pages: int
+    current_page: int
+
+
 class CatalogUseCase:
     def __init__(self, game_repo: GameRepository):
         self._game_repo = game_repo
 
     async def list_games(
-        self, platform: str | None = None, q: str | None = None, sort: str | None = None
-    ) -> list[GameORM]:
-        return await self._game_repo.list(platform=platform, q=q, sort=sort)
+        self,
+        platform: str | None = None,
+        q: str | None = None,
+        sort: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> PaginatedGames:
+        offset = (page - 1) * page_size
+        games = await self._game_repo.list(platform=platform, q=q, sort=sort, limit=page_size, offset=offset)
+        total_count = await self._game_repo.count_list(platform=platform, q=q)
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+        return PaginatedGames(
+            games=games,
+            total_count=total_count,
+            total_pages=total_pages,
+            current_page=page,
+        )
 
     async def list_platforms(self) -> list[str]:
         return await self._game_repo.list_platforms()

@@ -37,31 +37,63 @@
         <p class="pipeline-meta">No runs recorded yet.</p>
         {% endif %}
         <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
-        <p class="run-status" hidden></p>
+        <p class="run-status"{% if not (p.latest and p.latest.status == "running" and p.latest.current_item) %} hidden{% endif %}>{% if p.latest and p.latest.status == "running" and p.latest.current_item %}Running… {{ p.latest.current_item }}{% endif %}</p>
       </div>
       {% endfor %}
     </div>
 
-    <h2>Run History</h2>
-    <div class="table-scroll">
-      <table class="ops">
-        <thead>
-          <tr><th>Pipeline</th><th>Status</th><th>Started</th><th>Finished</th><th>In</th><th>Accepted</th><th>Rejected</th></tr>
-        </thead>
-        <tbody id="runs">
-          {% for run in runs %}
-          <tr class="status-{{ run.status }}">
-            <td>{{ run.stage }}</td>
-            <td class="status">{{ run.status }}</td>
-            <td>{{ run.started_at }}</td>
-            <td>{{ run.finished_at or "" }}</td>
-            <td>{{ run.items_in }}</td>
-            <td>{{ run.items_accepted }}</td>
-            <td>{{ run.items_rejected }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="tabs-header">
+      <button type="button" class="tab-btn active" data-target="tab-history">Run History</button>
+      <button type="button" class="tab-btn" data-target="tab-errors">Errors Log</button>
+    </div>
+
+    <div id="tab-history" class="tab-pane active">
+      <div class="table-scroll">
+        <table class="ops">
+          <thead>
+            <tr><th>Pipeline</th><th>Status</th><th>Started</th><th>Finished</th><th>In</th><th>Accepted</th><th>Rejected</th><th>Deferred</th><th>Reason</th></tr>
+          </thead>
+          <tbody id="runs">
+            {% for run in runs %}
+            <tr class="status-{{ run.status }}">
+              <td>{{ run.stage }}</td>
+              <td class="status">{{ run.status }}</td>
+              <td>{{ run.started_at }}</td>
+              <td>{{ run.finished_at or "" }}</td>
+              <td>{{ run.items_in }}</td>
+              <td>{{ run.items_accepted }}</td>
+              <td>{{ run.items_rejected }}</td>
+              <td>{{ run.items_deferred if 'items_deferred' in run else 0 }}</td>
+              <td class="error">{{ run.error_message or "" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="tab-errors" class="tab-pane">
+      <div class="table-scroll">
+        <table class="ops">
+          <thead>
+            <tr><th>Timestamp</th><th>Pipeline</th><th>Target Item</th><th>Error Message</th></tr>
+          </thead>
+          <tbody>
+            {% for err in error_log %}
+            <tr>
+              <td style="white-space: nowrap">{{ err.timestamp }}</td>
+              <td><span class="pipeline-badge">{{ err.pipeline }}</span></td>
+              <td>{{ err.item_ref }}</td>
+              <td class="error">{{ err.error_message }}</td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" style="text-align: center; color: var(--text-dim); padding: 2rem;">No errors recorded yet.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </main>
 
@@ -109,7 +141,7 @@
       const btn = document.querySelector('.run-btn[data-kind="' + run.stage + '"]');
       if (run.status === "running") {
         if (btn) btn.disabled = true;
-        showStatus(run.stage, "Running…", "pending");
+        showStatus(run.stage, run.current_item ? "Running… " + run.current_item : "Running…", "pending");
       } else if (run.status === "completed" || run.status === "failed") {
         // The stream re-announces every stage's current state on each new
         // connection (not just deltas), so a page that loads onto an
@@ -144,6 +176,15 @@
       const value = parseInt(refreshSelect.value, 10);
       localStorage.setItem(STORAGE_KEY, String(value));
       connectStream(value);
+    });
+
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.target).classList.add("active");
+      });
     });
   </script>
 </body>

@@ -41,4 +41,4 @@ app.dependency_overrides[get_catalog_use_case] = _catalog_use_case_dependency
 
 if __name__ == "__main__":
     log.info("metacritic-game-tracker web tier starting")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

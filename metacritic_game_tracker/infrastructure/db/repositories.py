@@ -76,6 +76,8 @@ class GameRepository:
         platform: str | None = None,
         q: str | None = None,
         sort: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[GameORM]:
         stmt = select(GameORM)
         if platform:
@@ -84,10 +86,28 @@ class GameRepository:
             stmt = stmt.where(GameORM.title.ilike(f"%{q}%"))
         if sort == "rating":
             stmt = stmt.outerjoin(PlatformScoreORM).order_by(
-                PlatformScoreORM.metascore.desc().nulls_last()
+                PlatformScoreORM.metascore.desc().nulls_last(), GameORM.id.desc()
             )
+        else:
+            stmt = stmt.order_by(GameORM.id.desc())
+            
+        stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
+
+    async def count_list(
+        self,
+        platform: str | None = None,
+        q: str | None = None,
+    ) -> int:
+        from sqlalchemy import func
+        stmt = select(func.count(GameORM.id.distinct()))
+        if platform:
+            stmt = stmt.join(PlatformScoreORM).where(PlatformScoreORM.platform == platform)
+        if q:
+            stmt = stmt.where(GameORM.title.ilike(f"%{q}%"))
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
 
     async def list_platforms(self) -> list[str]:
         """Distinct platform names actually present in the catalog — the filter

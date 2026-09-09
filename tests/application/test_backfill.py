@@ -143,6 +143,26 @@ async def test_run_counts_items_in_and_items_accepted(mock_session):
     assert run_row.items_accepted == 1
 
 
+async def test_run_updates_current_item_in_meta_as_it_processes_each_game(mock_session):
+    """Monitoring shows which game a manual run is currently processing —
+    meta.current_item must be set (and committed) per item, not only in the
+    single commit at the end, so a concurrent SSE poll from another session
+    can actually see it while the run is still in flight."""
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+    game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="Elden Ring")
+    game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="Valheim")
+
+    async def fake_games_missing(step):
+        return [(game1, None), (game2, None)]
+
+    use_case._games_missing = fake_games_missing
+
+    run_row = await use_case.run(AsyncMock(), stage="review_refresh", steps=("critic_summary",))
+
+    assert run_row.meta["current_item"] == "Valheim"
+    assert mock_session.commit.await_count >= 3  # initial "running" + one per item
+
+
 async def test_an_abandoned_step_is_never_reattempted():
     game = GameORM(id=1, metacritic_id=1, metacritic_slug="g", title="G")
     attempt = EnrichmentAttemptORM(

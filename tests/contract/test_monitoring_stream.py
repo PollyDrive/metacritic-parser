@@ -9,7 +9,10 @@ from metacritic_game_tracker.infrastructure.web.routes_monitoring import (
 def test_a_fresh_connection_emits_every_known_stage_immediately():
     """Regression: an earlier version only emitted on a *change*, so a visitor
     opening /monitoring mid-run saw nothing until the next transition."""
-    latest = {"ingest": (5, "running", "ingest"), "review_refresh": (2, "completed", "review_refresh")}
+    latest = {
+        "ingest": (5, "running", "ingest", "Elden Ring"),
+        "review_refresh": (2, "completed", "review_refresh", None),
+    }
 
     lines, updated = _stage_events(latest, last_seen_by_stage={})
 
@@ -20,7 +23,7 @@ def test_a_fresh_connection_emits_every_known_stage_immediately():
 
 
 def test_no_event_when_nothing_changed():
-    state = {"ingest": (5, "running", "ingest")}
+    state = {"ingest": (5, "running", "ingest", "Elden Ring")}
 
     lines, updated = _stage_events(state, last_seen_by_stage=state)
 
@@ -32,12 +35,12 @@ def test_only_the_changed_stage_is_emitted_others_stay_quiet():
     """Three independent pipelines — a transition in one must not resend the
     other two, and must not lose their last-known state either."""
     last_seen = {
-        "ingest": (5, "running", "ingest"),
-        "playthrough": (9, "completed", "playthrough"),
+        "ingest": (5, "running", "ingest", "Elden Ring"),
+        "playthrough": (9, "completed", "playthrough", None),
     }
     latest = {
-        "ingest": (5, "completed", "ingest"),  # changed
-        "playthrough": (9, "completed", "playthrough"),  # unchanged
+        "ingest": (5, "completed", "ingest", "Elden Ring"),  # changed
+        "playthrough": (9, "completed", "playthrough", None),  # unchanged
     }
 
     lines, updated = _stage_events(latest, last_seen_by_stage=last_seen)
@@ -45,8 +48,23 @@ def test_only_the_changed_stage_is_emitted_others_stay_quiet():
     assert len(lines) == 1
     assert '"stage": "ingest"' in lines[0]
     assert '"status": "completed"' in lines[0]
-    assert updated["playthrough"] == (9, "completed", "playthrough")
-    assert updated["ingest"] == (5, "completed", "ingest")
+    assert updated["playthrough"] == (9, "completed", "playthrough", None)
+    assert updated["ingest"] == (5, "completed", "ingest", "Elden Ring")
+
+
+def test_a_change_in_current_item_alone_emits_an_event_and_the_payload_carries_it():
+    """The run's status doesn't change between items — only which game is
+    currently being processed does — so a change in current_item alone must
+    still count as a change worth emitting, and the game name must be in the
+    payload so the client can show it under the pipeline's preloader."""
+    last_seen = {"ingest": (5, "running", "ingest", "Elden Ring")}
+    latest = {"ingest": (5, "running", "ingest", "Valheim")}
+
+    lines, updated = _stage_events(latest, last_seen_by_stage=last_seen)
+
+    assert len(lines) == 1
+    assert '"current_item": "Valheim"' in lines[0]
+    assert updated["ingest"] == (5, "running", "ingest", "Valheim")
 
 
 def test_resolve_poll_interval_defaults_when_missing():

@@ -60,7 +60,7 @@ async def call_llm(route: LLMRoute, prompt: str, http_client: httpx.AsyncClient)
         text = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
         return text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), route.model
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError):
         if route.fallbacks:
             return await call_llm(route.fallbacks[0], prompt, http_client)
         raise

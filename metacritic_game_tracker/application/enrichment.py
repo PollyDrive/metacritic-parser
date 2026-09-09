@@ -38,8 +38,7 @@ class ReviewEnrichmentUseCase:
         html = await self._fetch_reviews(game.metacritic_slug, audience)
         quotes = parser.parse_reviews(html, sample_size)
         if not quotes:
-            log.warning("No %s reviews found for %s", audience, game.metacritic_slug)
-            return
+            raise ValueError(f"No {audience} reviews found")
 
         result = await self._summarize(quotes, audience)
         now = datetime.now(UTC)

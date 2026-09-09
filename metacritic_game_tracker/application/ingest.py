@@ -112,6 +112,12 @@ class IngestGamesUseCase:
         accepted_parsed = []
 
         for stub in stubs:
+            # Committed per item (not only in the batch's final commit) so a
+            # concurrent viewer — the monitoring page's SSE poll — can show
+            # which game a manual run is currently processing.
+            run_row.meta = {"current_item": stub.metacritic_slug}
+            await self._session.commit()
+
             html = await self._fetch_detail(stub)
             resolved = parser.get_resolved_game(html)
             try:
@@ -153,6 +159,9 @@ class IngestGamesUseCase:
         primary_count = 0
 
         for parsed in accepted_parsed:
+            run_row.meta = {"current_item": parsed.title}
+            await self._session.commit()
+
             game, is_new = await self._game_repo.upsert(parsed)
             await self._game_repo.upsert_platform_scores(game, parsed)
             primary_count += 1
