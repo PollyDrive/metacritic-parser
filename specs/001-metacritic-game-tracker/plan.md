@@ -23,8 +23,10 @@ in-process hourly scheduler, and raw versioned SQL migrations (already started u
 **Language/Version**: Python 3.11+ (pinned 3.11.13 via `.python-version`)
 
 **Primary Dependencies**: FastAPI + Jinja2 (server-rendered web UI), SQLAlchemy 2.0 (async)
-+ asyncpg (persistence), httpx (outbound HTTP to Metacritic/YouTube/LLM), selectolax
-(HTML parsing), pydantic / pydantic-settings (config + LLM response validation)
++ asyncpg (persistence), httpx (all outbound HTTP — Metacritic, YouTube, LLM; no
+impersonation layer needed, research.md §5), selectolax (review-subpage HTML where needed;
+primary extraction is the embedded SSR payload, research.md §9), pydantic /
+pydantic-settings (bootstrap config + LLM response validation)
 
 **Storage**: PostgreSQL 16, versioned raw SQL migrations under `sql/migrations/`
 (`000_meta.sql`, `001_pipeline.sql`, `002_llm_calls.sql` already exist; domain tables added
@@ -46,9 +48,14 @@ search-typing time). One hourly ingestion run (20 games: scrape + upsert + revie
 summarization) completes in well under the 1-hour window between runs, leaving headroom for
 LLM latency and optional playthrough enrichment.
 
-**Constraints**: Metacritic scraping MUST be rate-limited (delay between requests) to avoid
-hammering the source site — not stated in the brief but required for the service to keep
-working at all. Monitoring view + manual-trigger control sit behind single-operator
+**Constraints**: Metacritic scraping is rate-limited for politeness (no anti-bot wall was
+found — verified, research.md §5), with block/challenge responses still classified explicitly
+rather than read as "no results". Review summarization reads the per-game `/critic-reviews`
+and `/user-reviews` pages, so budget ~3 requests per game (research.md §8). Enrichment runs
+only on games newly admitted by dedup or missing an output (FR-024), which is what keeps
+YouTube quota spend proportional to new games rather than pagination throughput
+(research.md §6). Operational knobs live in `runtime_config` and are re-read per run
+(research.md §11). Monitoring, manual trigger, and settings all sit behind single-operator
 basic auth (Constitution: Security & Data Handling); the public catalog has no auth.
 
 **Scale/Scope**: ~20 games/hour ingested (~480/day); single or few concurrent web visitors
@@ -92,7 +99,8 @@ metacritic_game_tracker/
 │   └── rules.py          # daily source selection, dedup key, similar-games intersection
 ├── application/
 │   ├── ingest.py          # IngestGamesUseCase: select source → scrape → upsert → record pipeline_runs
-│   ├── summarize.py       # GenerateReviewSummariesUseCase (critic + user, separate LLM calls)
+│   ├── backfill.py        # BackfillEnrichmentUseCase: derives missing-output work queue (FR-023)
+│   ├── enrichment.py      # ReviewEnrichmentUseCase: fetch reviews → summarize → db storage
 │   ├── playthrough.py    # FindPlaythroughTakeawayUseCase (US4, optional scope)
 │   └── catalog.py         # ListGames / GetGameDetail / search+filter+sort (US1-3)
 ├── infrastructure/
@@ -100,20 +108,27 @@ metacritic_game_tracker/
 │   │   ├── models.py       # SQLAlchemy ORM models
 │   │   ├── session.py       # async engine/sessionmaker
 │   │   └── repositories.py # GameRepository: upsert, query/filter/search/sort, related-games lookup
+│   ├── config/
+│   │   └── runtime.py            # reads/validates runtime_config; bounds enforced server-side
+│   ├── dq/
+│   │   └── gates.py              # Gate A (source conformance, aborts run) / Gate B (record validity)
+│   │                              # — plain code + CRITICAL logs + pipeline_rejects, no rule table (research.md §14)
 │   ├── scraper/
-│   │   ├── metacritic_client.py  # httpx: New Releases / See All page N / game detail pages
-│   │   └── parser.py             # selectolax: HTML → domain fields incl. Related Games list
+│   │   ├── metacritic_client.py  # httpx: New Releases / See All page N / game + review pages
+│   │   ├── payload.py            # extracts + resolves the Nuxt SSR state payload
+│   │   └── parser.py             # payload → domain fields incl. genres list
 │   ├── llm/
 │   │   └── review_summarizer.py  # uses shared.llm_config routes, writes llm_calls rows
 │   ├── youtube/
 │   │   └── playthrough_finder.py # US4: search + pick most-viewed + transcript (optional scope)
 │   ├── scheduler/
-│   │   └── hourly_job.py         # triggers IngestGamesUseCase hourly, records pipeline_runs
+│   │   └── tick.py               # "is a run due?" from pipeline_runs + run_requests; no in-memory timer
 │   └── web/
 │       ├── app.py                 # FastAPI app factory
 │       ├── routes_catalog.py       # US1-3 endpoints
-│       ├── routes_monitoring.py    # US5 endpoints, basic-auth protected (optional scope)
-│       └── templates/              # list.html, game_card.html, monitoring.html
+│       ├── routes_monitoring.py    # US5 status/SSE/manual-run, basic-auth protected
+│       ├── routes_config.py        # US5 settings page, basic-auth protected (FR-025/026)
+│       └── templates/              # list.html, game_card.html, monitoring.html, config.html
 └── shared/                         # guardrail.py, sanitizer.py, llm_config.py (already exist)
 
 tests/
@@ -125,10 +140,22 @@ tests/
 └── contract/            # FastAPI TestClient tests for routes_catalog / routes_monitoring
 ```
 
-**Structure Decision**: Single project, extending the existing scaffolded package —
-no separate frontend project. UI is server-rendered (Jinja2) to keep the mini-project
-scope small; `routes_monitoring.py` (US5) is the only piece needing live updates and uses
+**Structure Decision**: Single project and single image, but **two processes** (revised after
+architecture review #1, research.md §3): `app` runs the web tier (read-only — it never
+ingests), `worker` runs `scripts/run_scheduler.py`, which polls for a due hourly run or a
+pending `run_requests` row and invokes `IngestGamesUseCase` + `BackfillEnrichmentUseCase`.
+Exactly one worker replica; the web tier may be scaled freely without duplicating ingestion.
+No separate frontend project — UI is server-rendered (Jinja2) to keep the mini-project scope
+small; `routes_monitoring.py` (US5) is the only piece needing live updates and uses
 Server-Sent Events rather than pulling in a websocket framework.
+
+Entry points:
+
+```text
+main.py                    # web tier only (uvicorn + FastAPI app factory)
+scripts/run_scheduler.py   # worker loop: due-run check → ingest → backfill
+scripts/migrate.py         # SQL migration runner (research.md §1)
+```
 
 ## Complexity Tracking
 

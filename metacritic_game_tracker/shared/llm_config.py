@@ -14,19 +14,19 @@ class LLMRoute:
 
 # Резюме отзывов критиков/игроков — короткий, детерминированный вывод
 SIMPLE_ROUTE = LLMRoute(
-    model="anthropic/claude-haiku-4-5",
+    model="claude-haiku-4-5",
     temperature=0.1,
     max_tokens=700,
     timeout=30,
 )
 
-# Заключение по летсплею (Дополнительная часть 1) — из длинного транскрипта
+# Заключение по летсплею (Дополнительная часть 1) — короткая выжимка из
+# транскрипта, той же формы что и SIMPLE_ROUTE; Haiku вместо ранее используемой
+# Kimi K2 Thinking — задача экстрактивная, reasoning не нужен, и thinking-модель
+# делает цену непредсказуемой (думающие токены считаются как output).
 REASONING_ROUTE = LLMRoute(
-    model="moonshotai/kimi-k2-thinking",
+    model="claude-haiku-4-5",
     temperature=0.3,
-    max_tokens=8000,
-    timeout=120,
-    fallbacks=[
-        LLMRoute(model="anthropic/claude-haiku-4-5", temperature=0.3, max_tokens=600, timeout=30),
-    ],
+    max_tokens=600,
+    timeout=30,
 )

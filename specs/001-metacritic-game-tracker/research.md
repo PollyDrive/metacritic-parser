@@ -40,59 +40,543 @@ already provides.
 disproportionate to scope; WebSockets for monitoring — rejected, SSE is simpler and the
 data only flows server→client.
 
-## 3. Scheduler: in-process vs. external cron
+## 3. Scheduler: separate worker process, schedule anchored in the DB
 
-**Decision**: An in-process hourly scheduler (`infrastructure/scheduler/hourly_job.py`)
-started alongside the FastAPI app in `main.py`, rather than a separate cron container
-invoking a script.
+**Decision**: The hourly scheduler runs as a **separate process** (`scripts/run_scheduler.py`,
+its own `worker` service in `docker-compose.yml`, same image as the app). The web service
+only reads data and serves the UI — it never runs ingestion itself. The worker decides a
+run is due by reading the last completed `ingest` run's timestamp **from `pipeline_runs`**,
+not from an in-memory timer. The manual trigger (US5/FR-020) inserts a row into
+`run_requests`, which the worker picks up on its next poll (~10s).
 
-**Rationale**: Single-service mini-project — one Podman container already runs the app;
-adding a second scheduled-task container (or host cron reaching into the container) is
-more moving parts for no real benefit at this scale. The manual "force run" control (US5)
-needs to trigger the same code path the scheduler uses, which is simplest when both live
-in the same process.
+**Rationale**: Revised after architecture review #1, which correctly identified the
+in-process design as an antipattern on three counts, all of which apply here:
 
-**Alternatives considered**: host-level cron calling `podman compose exec app python
-scripts/run_ingest.py` — viable, closer to patterns used in other projects in this
-environment, but rejected here because it complicates wiring the manual-trigger button to
-the same run.
+1. *Multiple workers → duplicate ingestion.* The moment the web tier is run with more than
+   one uvicorn/gunicorn worker for availability, every worker starts its own scheduler and
+   the same 20 games get scraped N times concurrently. Nothing in the original design
+   prevented that; it just happened not to bite at one worker.
+2. *Event-loop coupling.* Ingestion is the heavy path (dozens of HTTP fetches plus LLM
+   calls); sharing a process with the web server means a stall in ingestion degrades the UI.
+3. *Restart resets the timer.* An in-memory "every 3600s" timer restarts from zero on every
+   deploy or container restart. A deploy shortly before each hour boundary silently
+   starves ingestion forever, and — per the pipeline-observability principle that a broken
+   stage and a working stage must not look alike — nothing would surface it. Anchoring
+   "is a run due?" to `pipeline_runs` in the database makes the schedule survive restarts
+   and makes lateness observable (`monitoring` already has a "hours since last successful
+   ingest" panel).
 
-## 4. Similar games: computed at read time vs. cached column
+The one argument for in-process — that the manual trigger should hit the same code path —
+survives intact: both the schedule and the manual request funnel into the same
+`IngestGamesUseCase`, just via a `run_requests` row instead of a direct function call. That
+also gives the 409-if-already-running check (contracts/web-ui.md) a durable place to look.
 
-**Decision**: Per the spec's clarified answer, "similar games" = the game's own scraped
-"Related Games" list (captured during ingestion, stored raw), intersected at read time
-against the local catalog. No separate `similar_games` table; the intersection is a query,
-not a stored relationship.
+**Alternatives considered**: host-level cron calling `podman compose exec app ...` —
+equivalent on correctness, rejected because it puts the schedule outside the repo (invisible
+to anyone reading the project) and makes the manual trigger harder to wire. Celery/RQ with a
+broker — rejected as disproportionate: one job type, once an hour, needs no broker.
 
-**Rationale**: The set of "games already in our catalog" changes every hour, so a cached
-intersection would need invalidation logic for zero benefit — the query is cheap (a
-raw-related-games array checked against existing game keys).
+## 4. Similar games: genre overlap, computed at read time — revised during implementation
 
-**Alternatives considered**: precompute and store a `game_similar_games` join table,
-refreshed on every ingestion run — rejected as premature for catalog sizes in the low
-thousands.
+**Original decision (now known wrong)**: "similar games" was to be the game's own scraped
+"Related Games" list, intersected at read time against the local catalog, keyed by a
+`relatedGameId` field assumed present in the SSR payload.
 
-## 5. Rate limiting outbound scraping
+**What's actually true, found while building the fixture for T006**: `relatedGameId` exists in
+the payload, but it is **not** a list of other games — it's a per-platform cross-reference
+within the *same* game (each entry in a game's `platforms[]` array carries a `relatedGameId`
+pointing to that platform's own "game" node id, distinct from the shared "title" id). Verified
+directly: for Elden Ring, every platform's `relatedGameId` resolves back to Elden Ring itself
+under a different Metacritic-internal id type, never to Diablo, Hades, or anything else.
 
-**Decision**: A fixed delay (e.g. 1-2s) between HTTP requests to Metacritic within a single
-ingestion run, plus standard retry/backoff on transient failures (see Edge Cases in spec).
+The live site's "Related Games" carousel is real (confirmed in-browser — 24 games: Hades II,
+Elden Ring: Shadow of the Erdtree, Diablo, Mass Effect 3, Hades…) but it is **not** attached to
+the game's own detail-page data at all. Its source, found in the same payload as an unresolved
+request template: `backend.metacritic.com/finder/metacritic/web?sortBy=-metaScore&mcoTypeId=13&
+genres=Action+RPG&limit=24&componentName=related-carousel` — i.e., a live, genre-filtered query
+against the same undocumented internal endpoint §9 already rejected as a data source (no
+stability contract). There is no per-game curated "related" list to scrape.
 
-**Rationale**: Not specified in the brief, but a hard requirement for the scraper to keep
-working — hammering the source risks IP blocks, which would break the service outright.
+**Revised decision**: "similar games" = other catalog games sharing at least one genre tag,
+ordered by Metascore. `genres` (e.g. `["Action RPG"]`) *is* reliably present in the game's own
+SSR payload (confirmed on the same fixture), so this is computable entirely from our own data —
+no call to `backend.metacritic.com` needed, which is strictly better than the original design.
 
-**Alternatives considered**: no rate limiting — rejected as it isn't a real alternative,
-just a way to get blocked; a full token-bucket/queue system — rejected as over-engineered
-for 20 sequential requests per hour.
+**Rationale for computing at read time, not caching**: the set of "games already in our
+catalog" changes every hour, so a cached intersection would need invalidation logic for zero
+benefit — the query is cheap.
+
+**Alternatives considered**: precompute and store a `game_similar_games` join table, refreshed
+on every ingestion run — rejected as premature for catalog sizes in the low thousands; querying
+`backend.metacritic.com`'s finder endpoint live (matching the site's own behavior exactly) —
+rejected per §9's reasoning (undocumented, no stability contract) and unnecessary now that
+genre overlap against our own data gives an equivalent result.
+
+**Implementation constraint** (from review #1, point 6, still binding): the lookup MUST be a
+single indexed query — `SELECT ... FROM games WHERE genres && :this_genres AND id != :this_id
+ORDER BY best_score DESC` (Postgres array-overlap `&&`, GIN-indexed) — never one query per
+candidate, never the catalog loaded into memory to intersect in Python.
+
+### 4.1 Userscore is not actually per-platform — found in the same fixture
+
+The main game dict (used for title/description/per-platform Metascore) has **no userscore field
+at all**. A userscore (`8.4` for Elden Ring) does exist in the payload, but only inside a
+*different* embedded copy of the same game — the resolved results of the "related-carousel"
+finder call (§4, the same one that turned out not to be a related-games list) happens to include
+the requesting game itself as one of its own results, carrying a single `userScore.score` with
+no platform attached. There is no evidence Metacritic tracks distinct user scores per platform
+the way it does critic scores.
+
+**Decision**: treat Userscore as one value per **game** (title-level), not per platform, sourced
+from that self-referencing node when present. `platform_scores.userscore` (schema unchanged, to
+avoid a mid-implementation migration reshuffle) is populated with this same value on every
+platform row for the game — a known duplication, not a per-platform measurement. Null when the
+game doesn't appear in its own related-carousel results (parser should not depend on that
+happening; treat as "tbd" like a missing Metascore). FR-006's "each platform entry has its own
+Metascore and Userscore" is satisfied at the storage level but the Userscore values are
+identical across a game's platforms by construction — documented here rather than silently
+implied by the schema.
+
+## 5. Outbound scraping: politeness, not anti-bot theatre
+
+**Decision**: Plain `httpx` with a realistic `User-Agent`, a configurable inter-request delay,
+and retry/backoff. **No** TLS-fingerprint impersonation (`curl_cffi`), **no** proxy rotation,
+**no** headless browser. Keep one cheap safety net: a response that *is* a block or challenge
+(403/429, interstitial) must be classified as its own `reason_code` and fail the run loudly,
+never counted as "this page had no games".
+
+**Rationale — measured, not assumed.** Review #1 (point 4) asserted Metacritic sits behind
+Cloudflare and that default-client traffic would be "quickly blocked (403 or captcha)". That
+was tested directly against the live site rather than taken on faith, and it is **false**:
+
+```text
+curl, default UA (curl/8.x), no headers    → 200, 970 KB   ← the supposedly-blocked profile
+curl, browser UA                            → 200, 970 KB
+/browse/game/all/all/all-time/new/          → 200, 33 games on page
+/game/elden-ring/critic-reviews/            → 200, 306 KB
+/game/elden-ring/user-reviews/              → 200, 451 KB
+```
+
+The single occurrence of "captcha" in the markup is a **reCAPTCHA site key belonging to the
+login form** (`recaptcha:{siteKey:"6Lff…",hideBadge:true}` in the Nuxt config) — it guards
+account actions, not content reads. There is no interstitial and no challenge on the pages
+this service actually fetches.
+
+So the impersonation stack in the previous revision was defending against a failure mode that
+does not currently exist, at the cost of an extra dependency and a harder-to-debug client. It
+is removed. What survives is the part that is cheap and that pays off *if* the situation ever
+changes: politeness (so we don't cause the problem) and explicit block classification (so if
+they ever do start blocking, we find out immediately instead of ingesting nothing while the
+dashboard stays green).
+
+**The failure the block-classification still prevents**: a challenge page parses as valid HTML
+with zero game entries. Without explicit classification, a fully-blocked scraper and a
+genuinely empty listing page produce identical telemetry — `items_in: 0, status: completed`.
+
+**Alternatives considered**: `curl_cffi` impersonation — rejected, measured as unnecessary;
+Playwright — rejected, heavy, and unnecessary for pages that are fully server-rendered (§9);
+proxy rotation — rejected, costs money against an unobserved failure mode. All three remain
+available behind the `metacritic_client.py` interface if the measurements ever change, which is
+the actual architectural requirement: keep the client swappable, don't pre-pay for the swap.
 
 ## 6. YouTube playthrough discovery + transcription (US4, optional scope)
 
-**Decision**: YouTube Data API v3 (search + view counts) to find the most-viewed public
-playthrough for a game title; transcript via YouTube's own caption track when available,
-falling back to an LLM-based audio transcription step only if no caption track exists.
+**Decision**: Official YouTube Data API v3. Enrichment runs **only on games newly admitted to
+the catalog by deduplication** — never on the raw per-run throughput. A persisted daily budget
+(`youtube_quota_usage`) remains as a safety rail, defaulting generously, with games prioritized
+by Metascore then recency. Transcript comes from the video's caption track when present, with
+LLM audio transcription only as a fallback.
 
-**Rationale**: Using existing captions avoids an expensive/slow audio-transcription step
-in the common case; falling back only when necessary keeps cost and latency down for an
-optional/stretch story.
+**Rationale — the previous revision's arithmetic was wrong, and the error was placement, not
+multiplication.** Review #1 computed 480 games/day × 100 units = 48,000 units against a
+10,000-unit quota, and the previous revision accepted that unchallenged. Both were counting
+**scraped** items, not **new** ones. Enrichment is:
 
-**Alternatives considered**: always transcribing audio directly — rejected as needlessly
-expensive when captions already exist for most popular videos.
+- **once per game, ever** — `playthrough_takeaways` is unique per `game_id`, and the derived
+  work queue (§7) only selects games *missing* a takeaway;
+- **downstream of dedup** — the ingest stage upserts by the game's stable id (§10), so a run's
+  20 items resolve into some new games and some already-known ones.
+
+Only the new ones reach enrichment. And the steady-state new-game rate is not 480/day: that
+figure is the *pagination* rate through a "sorted by newest" listing of Metacritic's entire
+back catalogue. After the first pass, the overwhelming majority of every page is already
+known; genuinely new releases arrive at the rate the games industry ships them — order of tens
+per day, not hundreds.
+
+So the honest model is:
+
+```text
+scraped/day        = games_per_run × runs_per_day   (~480 at defaults — pagination throughput)
+new/day            = scraped/day − already in catalog  (large during initial backfill, small in steady state)
+youtube searches   = new/day                        (100 units each)
+```
+
+The initial catalog backfill *is* the expensive window — that's when new/day approaches
+scraped/day and the budget rail actually binds, deferring the overflow to later days. In steady
+state the spend is far below quota. This also means the budget must be **tunable at runtime**
+(§11) rather than a constant: its correct value depends on which phase the deployment is in.
+
+The review's proposed remedy — bypassing the API via yt-dlp/scraped search results — stays
+rejected regardless of the arithmetic: it violates YouTube's Terms of Service, in a deliverable
+whose purpose is to be readable as a work sample. And with the corrected placement, there is
+nothing left to justify it.
+
+The budget must still be *persisted* rather than counted in memory, for the same reason the
+schedule moved into the database (§3): a restart must not silently reset the counter.
+
+**Alternatives considered**: yt-dlp / scraping YouTube search — rejected per above (ToS,
+fragility against a surface designed to change); requesting a quota extension from Google —
+not mutually exclusive, a reasonable follow-up if coverage matters more later, but the design
+must not *depend* on it being granted; always transcribing audio instead of using captions —
+rejected as needlessly slow and expensive when captions exist for most popular videos.
+
+## 7. Partial-failure recovery: derived work queue, not a status enum
+
+**Decision**: Enrichment work (critic summary, user summary, playthrough takeaway) is
+**derived from missing data**, not tracked by a status field on `games`. Each ingestion cycle
+runs a backfill stage that asks, in SQL, "which catalog games are missing a critic summary /
+user summary / playthrough takeaway, and are not in retry backoff?" and processes those —
+independently of whether the game appeared in a Metacritic listing that day. Permanent-failure
+protection comes from an `enrichment_attempts` table (`game_id`, `step`, `attempts`,
+`last_error`, `next_retry_at`) with exponential backoff and an attempt ceiling.
+
+**Rationale**: Review #1 (point 3) identified a genuine data-loss bug in the original design,
+and it is the most serious finding in the review. The original rule — "skip games already
+processed today", where "processed" meant nothing more than "a row exists with today's
+`last_updated_at`" — makes a mid-pipeline failure permanent. Scrape succeeds, the game row is
+written, the LLM call times out, and from the next hour onward that game looks processed
+forever. It never reappears in "New Releases" (it is no longer new), so a re-crawl-triggered
+regeneration never fires. The catalog silently accumulates games with no review summaries, and
+the run counters still say `completed`. (FR-010 was later reworded to match the fix below
+rather than the "regenerate on re-crawl" phrasing that motivated finding this bug — see
+`/speckit-analyze` finding F1.)
+
+Deriving the queue from missing data rather than from a status enum was chosen because:
+
+- **It is idempotent by construction.** The question "what is missing?" is answered by the
+  data itself, so a crash at any point leaves the system in a state the next run understands.
+  No transition can be skipped, because there are no transitions to skip.
+- **A linear status enum lies about partial completion.** `pending_llm → pending_youtube →
+  completed` cannot express "critic summary present, user summary failed", which is exactly the
+  state a timeout produces. Encoding each step's presence separately avoids inventing a
+  combinatorial status vocabulary.
+- **It self-heals across schema/logic changes.** If summarization is later improved and old
+  rows are cleared, the backfill picks them up with no migration of status values.
+
+`enrichment_attempts` is what stops this from hot-looping: without it, a game whose review page
+permanently 404s would be retried every hour forever, burning LLM budget on a guaranteed
+failure. Rejected/exhausted items land in `pipeline_rejects` with a reason code so they are
+visible rather than merely absent.
+
+**Alternatives considered**: status enum on `games` (`pending_llm`/`pending_youtube`/
+`completed`/`error`), as the review proposed — simpler to read at a glance, and a perfectly
+reasonable design, but rejected for the partial-completion expressiveness problem above; a
+message queue with per-step retry semantics (Celery, etc.) — rejected as disproportionate for
+three enrichment steps on 20 items/hour, and it would put the retry state somewhere less
+inspectable than a table the monitoring dashboard already reads.
+
+## 8. Review sampling depth
+
+**Decision**: For each game, additionally fetch its `/critic-reviews` and `/user-reviews`
+pages and feed a representative sample (target: up to ~20 of each, ordered as Metacritic
+presents them) into summarization — rather than summarizing only the handful of excerpts
+shown on the game's main page.
+
+**Rationale**: Review #1 (point 5) is correct: a game's main page carries only a few featured
+critic quotes and a couple of user reviews, and a summary built from that slice is a summary
+of Metacritic's editorial selection, not of critical reception. FR-008/FR-009 ask what critics
+and players *like and dislike*, which a 3-quote sample cannot answer honestly — the failure is
+silent, since a shallow summary reads exactly like a good one.
+
+The cost is real but bounded: it takes the per-game fetch count from 1 to 3, so a 20-game run
+goes from ~21 requests to ~61. At a 1-2s delay that is a couple of minutes per hourly run —
+comfortably inside the window — and it compounds with the blocking risk in §5, which is
+precisely why §5 hardens the client rather than relying on politeness alone.
+
+Both subpages were verified to exist and return full content:
+`/game/elden-ring/critic-reviews/` → 200 (306 KB), `/game/elden-ring/user-reviews/` → 200
+(451 KB).
+
+**Alternatives considered**: summarizing only the main-page excerpts — rejected, it fails the
+requirement quietly; paginating deeply through all reviews for popular titles — rejected, the
+marginal signal past ~20 reviews per audience does not justify the extra requests.
+
+## 9. Extraction: embedded SSR payload, not DOM selectors
+
+**Decision**: Extract game data from the **Nuxt SSR state payload embedded in the page HTML**,
+not by walking the DOM with CSS selectors. `selectolax` stays only for the review subpages if
+their content proves not to be in the payload.
+
+**Rationale**: Inspection of the live pages shows Metacritic is a **Nuxt** app rendered
+server-side — the page ships with its full structured state inline, and loading a game page in
+a real browser produces **no** XHR calls to `backend.metacritic.com` for the content (only the
+auth endpoints appear in the markup, and those are unused for anonymous reads). Everything we
+need is already in the first response:
+
+```text
+criticScoreSummary · userScore · platforms · production (developer/publisher)
+description · video · images · genres · gameTaxonomy · releaseDate
+```
+
+Parsing that payload beats CSS selectors on the axis that matters for a scraper's lifespan:
+selectors break on any visual redesign, while the state payload is the app's own data contract
+and changes only when the underlying model does. It is also dramatically cheaper — no DOM tree
+construction over ~1 MB of markup per page.
+
+The one wrinkle: Nuxt serializes with an **indexed/flattened** format (keys map to positions in
+a flat value array — `{"criticScoreSummary":1815,…,"platforms":1876}` followed by the values),
+so extraction is "parse the payload, then resolve index references", not `json.loads` into a
+ready-made object. That's a contained piece of work in `parser.py` and worth it.
+
+**Correction found while building the payload-parsing fixture (T006)**: a `relatedGameId` field
+does exist in the payload, but per-platform-entry, not as a related-games list — it cross-
+references the *same* game's other internal node types, never other games. The similar-games
+design in §4 originally rested on this field and has been revised to use `genres` instead, which
+*is* genuinely present and fit for purpose — see §4 for the full correction.
+
+**Alternatives considered**: CSS/XPath selectors over rendered HTML — rejected as the fragile
+option now that a structured payload is known to exist; calling `backend.metacritic.com`
+directly with the site's embedded API key — rejected, it is an undocumented internal surface
+with no stability contract, and SSR already hands us the same data through the public page.
+
+### 9.1 Listing pages need their own extraction step — not covered above
+
+**Gap found during `/speckit-analyze`** (finding C1): everything above describes parsing a
+single game's own detail page. Nothing in the design said how "New Releases" (`/game/`) or "See
+All / Newest" (`/browse/game/all/all/all-time/new/`) — the two *listing* pages FR-002/FR-003
+actually source candidate games from — get turned into a list of slugs/ids to then fetch detail
+pages for. `IngestGamesUseCase`'s "fetch" step was underspecified without this.
+
+**Decision**: Add a dedicated `list_games(html) -> list[GameStub]` step in
+`infrastructure/scraper/parser.py` (a `GameStub` carries just `slug` + `metacritic_id` — enough
+to dedupe against `ingest_state`/`games` before spending a request on the full detail page).
+Live inspection during this session confirmed both listing URLs return the games as
+`<a href="/game/<slug>/">` anchors (33 slugs recovered from `/browse/.../new/` via a simple
+regex) — this was checked with a plain href scan, **not** yet against the page's Nuxt SSR
+payload the way detail pages were (§9). Prefer the payload here too, for the same reason
+(selectors break on redesign, the payload doesn't) — implementation should check whether the
+listing pages' Nuxt payload also carries a structured game array before falling back to anchor
+parsing. Whichever it turns out to be, it's the same `list_games()` function's job either way.
+
+**Task**: test `T013a`, implementation `T025a` in `tasks.md` (Phase 2).
+
+## 10. Deduplication key
+
+**Decision**: Deduplicate on Metacritic's **stable numeric game id** (present in the SSR
+payload — e.g. `1300501979` for Elden Ring), with `metacritic_slug` stored alongside as a
+human-readable secondary identifier, **not** as the identity.
+
+**Rationale**: The previous revision keyed on `metacritic_slug`. That was the wrong choice for
+a natural key: slugs are derived from titles, and titles get corrected, re-branded, or
+disambiguated (`elden-ring` → `elden-ring-2` collisions are visible in the live listing, where
+suffixed slugs like `aggelos-2` and `aliens-fireteam-elite-2` already appear). A slug change
+would make the same game insert a second time and split its scores, summaries, and takeaway
+across two rows — silently, since nothing would error.
+
+URL structure was verified as `/game/<slug>/` with **no platform segment** — modern Metacritic
+serves one page per game with platforms as a field. This confirms the one-game-one-row model in
+`data-model.md`: a multi-platform title is one `games` row with several `platform_scores`, not
+several games.
+
+Storing both means the numeric id carries identity while the slug stays available for building
+URLs and for human debugging — and a slug change becomes a harmless attribute update instead of
+a duplicate record.
+
+**Alternatives considered**: slug as primary key — rejected per above; `(title, release_year)`
+composite — rejected, unstable across re-releases and remasters and worse than either.
+
+## 11. Runtime-tunable configuration
+
+**Decision**: Split configuration in two by **who changes it and how often**:
+
+- **Bootstrap config** — `.env` via pydantic-settings: DB URL, API keys, credentials, ports,
+  `LOGS_DIR`. Secrets and infrastructure. Changed by deploy, never exposed in the UI.
+- **Operational config** — a `runtime_config` table, edited live through an operator-only page
+  and re-read by the worker at the start of each run: cadence, active hours, batch size,
+  politeness delay, review sample sizes, enrichment toggles and budgets, retry/backoff limits.
+
+**Rationale**: These knobs are exactly the values whose right setting is *discovered by running
+the thing* — batch size, delay, how many reviews are enough, how much YouTube budget the
+current phase warrants (§6). Baking them into `.env` means every adjustment is a redeploy, and
+in practice that means they never get adjusted and instead ossify at whatever the first guess
+was. Putting them in the database with a UI makes tuning a normal operation.
+
+Constraints that make this safe rather than a footgun:
+
+- **Never secrets.** The runtime table holds operational numbers only. Credentials stay in
+  `.env`, so the config page leaking or being over-shared cannot expose them.
+- **Operator-authenticated.** The config page sits behind the same basic auth as the monitoring
+  view and force-run control (FR-022) — it is emphatically not public. Anonymous write access
+  to `request_delay_seconds` would be a way for a visitor to make this service hammer
+  Metacritic.
+- **Validated with bounds, server-side.** Every key has a type and a permitted range (e.g.
+  delay ≥ 0.5s, batch size 1-100). A UI that accepts `delay = 0` is a UI that lets an operator
+  turn the service into an accidental denial-of-service against the source site.
+- **Audited.** Each row records `updated_at`/`updated_by`; changes are logged. When ingestion
+  quality shifts, "what changed?" must be answerable — a config edit is a deploy-equivalent
+  event and belongs in the same evidence trail as `code_version` in `pipeline_runs`.
+- **Read per run, not cached indefinitely.** The worker re-reads at run start, so a change takes
+  effect on the next tick with no restart, and a run's behavior is attributable to the config it
+  actually ran with.
+
+**Alternatives considered**: everything in `.env` — rejected, redeploy per tweak; a config file
+mounted into the container — rejected, same redeploy problem plus drift between replicas;
+hot-reloading a file watcher — rejected, the DB is already the coordination point between web
+and worker (§3), so adding a second one earns nothing.
+
+## 12. Ingest state: what the first two revisions left unbuilt
+
+**Decision**: Add explicit, persisted ingest state — `ingest_state` (pagination cursor +
+daily-progress marker) — and pin the "calendar day" boundary to a configured timezone.
+
+**Rationale**: A data-engineering read of the ingest design found two requirements that the
+spec asserts but that **nothing in the data model could actually satisfy** — they would have
+been discovered during implementation, as bugs:
+
+1. **"Games not already processed today" (FR-004) had nowhere to live.** No table recorded
+   which games a day's runs had already handled. The only candidate was
+   `games.last_updated_at` — which review #1 correctly banned from meaning "done" (§7). So the
+   selection rule was unimplementable as written. Fixed by recording per-day progress in
+   `ingest_state`.
+2. **"Advance to the next page each run" (FR-003) had no cursor.** `pipeline_runs.source`
+   stores *which* listing was used, never *which page*. Resuming after a restart would have
+   silently restarted from page 1 and re-scraped the same games hourly, forever — a failure that
+   looks exactly like normal operation from the outside (runs complete, items flow, nothing new
+   ever appears). Fixed by persisting the cursor in `ingest_state`.
+
+A third finding — no raw landing layer, so a parser fix can't be replayed over history without
+re-fetching pages that have since moved on — was raised and then **deliberately not built**: an
+immutable payload archive plus a frozen-evaluation-harness practice is real data-engineering
+hygiene, but it is monitoring/quality-process scope for a project whose observability is
+intentionally kept to "LLM calls, cost, and critical logs" (research.md §13). If a parser
+regression becomes a recurring problem, this is the first thing to add back; it is not needed
+to satisfy any FR.
+
+Two further findings recorded as accepted trade-offs:
+
+- **Score history is destroyed on upsert.** `platform_scores` is updated in place, so a game's
+  Metascore drift over time is overwritten and unrecoverable. The brief explicitly says update
+  the existing record, so this follows the requirement — but it is a deliberate discard of the
+  one genuinely time-series-shaped signal in the dataset. Not softened by anything, per the
+  landing-layer decision above; accepted as-is.
+- **Slug drift is now harmless** by keying on the numeric id (§10), but a game whose Metacritic
+  id is *reissued* would still duplicate. Not defended against; noted.
+
+**Timezone**: "each new day" (FR-005) was previously "server local or UTC, unspecified". With
+active-hours scheduling now configurable (§11), the boundary is load-bearing — an unpinned
+timezone means the daily reset and the active window can disagree about what day it is. Pinned
+to a configured `ingest.timezone`, defaulting to UTC.
+
+## 13. Observability scope: LLM calls, cost, and critical logs — nothing else
+
+**Decision (supersedes the two prior revisions of this section)**: This project's observability
+is deliberately narrow. Kept: email alerting via Resend API, `llm_calls` + `meta.llm_model_costs` (every LLM call, its model,
+tokens, and cost — already built, `sql/migrations/002_llm_calls.sql`), and application logging
+at `CRITICAL`/`ERROR` for genuine failures. Cut: the Grafana dashboard,
+the data-quality rule-catalogue table, the raw-payload landing layer, and the frozen
+evaluation-set practice — all of it built across the previous two revisions, all of it removed
+in this one.
+
+**Why the reversal**: this is a mini/test project without a Grafana instance
+it owns (the shared `~/Code/monitoring` is a separate project on this host). Building a
+dashboard and a metrics-aggregation table for a service at this scale is
+solving a problem the project doesn't have yet. What the project actually needs — visibility
+into what LLM calls cost, and knowing when something breaks — is served by a cost table that
+already exists and by reading the application log.
+
+**What "critical logs" means concretely**: failures that matter are logged at `CRITICAL` or
+`ERROR` with enough context to act on (which stage, which item, what went wrong), not counted
+into a metrics table nobody queries. Concretely:
+
+- Gate A (source-schema conformance, §14) failing logs `CRITICAL` and aborts the run.
+- An ingestion run ending in `status='failed'` logs `ERROR` with `error_message`.
+- `pipeline_rejects` still records individual reject reasons — it costs nothing to write and is
+  the only way to audit *why* something was dropped if that's ever needed — but nothing reads it
+  automatically or alerts on it.
+
+**Two pieces of the old design survive, because they are correctness fixes, not monitoring**:
+
+1. **No silent catches.** Every `except` either re-raises or is a deliberate, narrow handler for
+   an expected condition (e.g. "video has no captions" → fall back to transcription). No
+   `except: pass`, no per-item handler that only logs and continues — a bare "could not process
+   game X" log line is equally consistent with one glitch and with every item failing, and
+   without re-raising there's no way to tell which.
+2. **Rejects are not read back downstream.** The backfill work queue (§7) excludes
+   `enrichment_attempts.state = 'abandoned'` rows, or a permanently-failing game would be
+   retried forever. This is existing pipeline logic, unrelated to whether anything watches it
+   from outside.
+
+**Explicitly dropped, and why each is fine to drop for this project**: fallback-firing counters
+(§6's caption fallback, the LLM model fallback) — useful in production, not worth the
+instrumentation for a service nobody's paging on; active-hours-aware staleness computation — only
+matters if something is alerting on staleness, and nothing is; the frozen evaluation set for
+parser regressions — real hygiene, reintroduce if parser breakage becomes a recurring problem;
+business-outcome/judgement-quality metrics (SC-006/SC-007, added in the previous revision) — see
+below, kept as spec success criteria but not as anything instrumented.
+
+**SC-006/SC-007 note**: these two success criteria (business outcome baseline, LLM-summary
+judgement quality) stay in `spec.md` as a statement of what "good" means, but nothing in this
+revision builds machinery to measure them automatically — that would be exactly the dashboard
+this section just removed. If they matter later, they're evaluated manually.
+
+## 14. Data-quality gates on the source
+
+**Decision**: Two validation checks, implemented as plain code in `infrastructure/dq/gates.py`
+— no rule-catalogue table, no severity-tier taxonomy. A failure is a
+`CRITICAL` log line (Gate A) or a `pipeline_rejects` row (Gate B), per §13's scope.
+
+### 14.1 Two gates, because two different things break
+
+| | Gate A — source conformance | Gate B — record validity |
+|---|---|---|
+| **Runs on** | the raw SSR payload, before parsing | each parsed record, before upsert |
+| **Asks** | "does the source still have the shape we expect?" | "is this particular game usable?" |
+| **Checks** | required keys present with expected types | non-null required fields, value ranges |
+| **Failure means** | the source changed — the run is suspect as a whole | this item is odd — the run is fine |
+| **Response** | abort the run, log `CRITICAL`, write nothing | reject or flag the item, continue the run |
+
+Why this split matters even without a dashboard behind it: with only Gate B, a Metacritic markup
+change presents as "20 individual games all happened to be malformed" — a diagnosis that sends
+whoever's debugging to look at 20 games instead of at one schema change. Gate A names the cause
+directly in the log line instead of leaving it to be inferred from a pile of individual rejects.
+
+### 14.2 Circuit breaker: a failed gate must not advance the cursor
+
+If Gate A fails, or Gate B rejects more than `dq.max_reject_ratio` of a run's items, the run
+aborts with `status='failed'` **and the pagination cursor (`ingest_state.see_all_next_page`) is
+not advanced.**
+
+This is the one piece of the data-quality work that is a correctness requirement rather than an
+observability nicety, which is why it survives this revision's cuts intact. The cursor only
+advances forward (FR-003); if a broken run advanced it anyway, a markup break would march the
+cursor through pages that were never actually ingested, and those games would never be
+revisited — permanent, silent data loss, not a data-quality nuisance. Failing closed on the
+cursor makes a breakage cost time (the run is retried later), not data.
+
+**Gap found during `/speckit-analyze`** (finding E1): `dq.max_reject_ratio` was seeded as a
+`runtime_config` key but nothing computed it. `check_record()` (Gate B, §14.1) verdicts one
+record at a time and has no view of the batch, so the ratio can't live there — it's
+`IngestGamesUseCase`'s job: after Gate B has run over every fetched record, count
+`rejected / checked` for the run and abort (same "no cursor advance" treatment as a Gate A
+failure) if it exceeds `dq.max_reject_ratio`, *before* upserting anything from that batch.
+Test `T013b`, implementation `T028a` in `tasks.md`.
+
+### 14.3 "Required but missing" reuses the backfill queue, not a new mechanism
+
+A record missing a non-identifying required field (description, developer, cover image) is
+still admitted to the catalog — the scores render, search works — and is queued for
+re-extraction through the *same* derived work queue that already exists for missing review
+summaries (§7). A game missing its description is incomplete work, semantically identical to a
+game missing its critic summary: same query shape, same `enrichment_attempts` backoff. This also
+means a field a markup change emptied gets re-extracted automatically once the parser is fixed —
+no separate backfill script, no new table.
+
+A record missing an *identifying* field (`metacritic_id`, `title`, or any platform at all)
+cannot be deduplicated or displayed at all, so it is rejected outright to `pipeline_rejects`
+rather than admitted incomplete.
+
+**Alternatives considered**: a DQ framework (Great Expectations, Soda) — rejected both times,
+too heavy for a few dozen assertions; validating only after upsert — rejected, lets bad rows
+into the catalog; failing the item but advancing the cursor — rejected per §14.2; a dedicated
+metrics/rule-catalogue table (this revision's predecessor) — rejected per §13, monitoring
+scope this project doesn't need.

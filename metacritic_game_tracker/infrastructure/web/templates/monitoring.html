@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitoring — Metacritic Game Tracker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="crumb"><a href="/">&larr; Home</a> &middot; <a href="/monitoring/config">Settings</a></nav>
+
+  <main class="page">
+    <div class="page-header-row">
+      <h1>Pipeline Status</h1>
+      <div class="refresh-control">
+        <label for="refresh-interval">Refresh</label>
+        <select id="refresh-interval">
+          <option value="5">5s</option>
+          <option value="30">30s</option>
+          <option value="60">1m</option>
+          <option value="300">5m</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="pipeline-grid">
+      {% for p in pipelines %}
+      <div class="pipeline-card" data-kind="{{ p.kind }}">
+        <div class="pipeline-card-head">
+          <h3>{{ {"ingest": "Ingest", "review_refresh": "Review Refresh", "playthrough": "Playthrough"}[p.kind] }}</h3>
+          <span class="pipeline-badge status-{{ p.latest.status if p.latest else 'idle' }}">{{ p.latest.status if p.latest else "never run" }}</span>
+        </div>
+        {% if p.latest %}
+        <p class="pipeline-meta">Started {{ p.latest.started_at }}{% if p.latest.finished_at %}<br>Finished {{ p.latest.finished_at }}{% endif %}</p>
+        <p class="pipeline-meta">In {{ p.latest.items_in }} &middot; Accepted {{ p.latest.items_accepted }} &middot; Rejected {{ p.latest.items_rejected }}</p>
+        {% else %}
+        <p class="pipeline-meta">No runs recorded yet.</p>
+        {% endif %}
+        <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
+        <p class="run-status" hidden></p>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h2>Run History</h2>
+    <div class="table-scroll">
+      <table class="ops">
+        <thead>
+          <tr><th>Pipeline</th><th>Status</th><th>Started</th><th>Finished</th><th>In</th><th>Accepted</th><th>Rejected</th></tr>
+        </thead>
+        <tbody id="runs">
+          {% for run in runs %}
+          <tr class="status-{{ run.status }}">
+            <td>{{ run.stage }}</td>
+            <td class="status">{{ run.status }}</td>
+            <td>{{ run.started_at }}</td>
+            <td>{{ run.finished_at or "" }}</td>
+            <td>{{ run.items_in }}</td>
+            <td>{{ run.items_accepted }}</td>
+            <td>{{ run.items_rejected }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const refreshSelect = document.getElementById("refresh-interval");
+    const REFRESH_OPTIONS = [5, 30, 60, 300];
+    const STORAGE_KEY = "monitoringRefreshInterval";
+
+    function cardFor(kind) {
+      return document.querySelector('.pipeline-card[data-kind="' + kind + '"]');
+    }
+
+    function showStatus(kind, text, level) {
+      const card = cardFor(kind);
+      if (!card) return;
+      const el = card.querySelector(".run-status");
+      el.hidden = false;
+      el.textContent = text;
+      el.className = "run-status " + (level || "");
+    }
+
+    document.querySelectorAll(".run-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const kind = btn.dataset.kind;
+        btn.disabled = true;
+        showStatus(kind, "Queuing run…", "pending");
+        try {
+          const res = await fetch("/monitoring/run?kind=" + encodeURIComponent(kind), { method: "POST" });
+          if (res.status === 202) {
+            showStatus(kind, "Queued — waiting for the worker to pick it up…", "pending");
+          } else {
+            const body = await res.json().catch(() => ({}));
+            showStatus(kind, body.detail || "Could not start a run.", "error");
+            btn.disabled = false;
+          }
+        } catch (err) {
+          showStatus(kind, "Request failed — check your connection.", "error");
+          btn.disabled = false;
+        }
+      });
+    });
+
+    function handleStreamMessage(event) {
+      const run = JSON.parse(event.data);
+      const btn = document.querySelector('.run-btn[data-kind="' + run.stage + '"]');
+      if (run.status === "running") {
+        if (btn) btn.disabled = true;
+        showStatus(run.stage, "Running…", "pending");
+      } else if (run.status === "completed" || run.status === "failed") {
+        // The stream re-announces every stage's current state on each new
+        // connection (not just deltas), so a page that loads onto an
+        // already-finished run sees a "completed" event too. Only reload if
+        // this tab itself watched the run go running -> done (btn disabled) —
+        // otherwise every reload reopens the stream and re-triggers this
+        // branch forever.
+        if (btn && btn.disabled) {
+          showStatus(
+            run.stage,
+            run.status === "completed" ? "Completed — refreshing…" : "Run failed — refreshing…",
+            run.status === "completed" ? "success" : "error"
+          );
+          setTimeout(() => window.location.reload(), 800);
+        }
+      }
+    }
+
+    let currentSource = null;
+    function connectStream(intervalSeconds) {
+      if (currentSource) currentSource.close();
+      currentSource = new EventSource("/monitoring/stream?interval=" + intervalSeconds);
+      currentSource.onmessage = handleStreamMessage;
+    }
+
+    const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+    const initialInterval = REFRESH_OPTIONS.includes(saved) ? saved : 5;
+    refreshSelect.value = String(initialInterval);
+    connectStream(initialInterval);
+
+    refreshSelect.addEventListener("change", () => {
+      const value = parseInt(refreshSelect.value, 10);
+      localStorage.setItem(STORAGE_KEY, String(value));
+      connectStream(value);
+    });
+  </script>
+</body>
+</html>

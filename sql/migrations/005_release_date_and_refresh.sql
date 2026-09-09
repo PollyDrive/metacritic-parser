@@ -1,0 +1,3 @@
+ALTER TABLE games
+ADD COLUMN release_date DATE NULL,
+ADD COLUMN next_refresh_at TIMESTAMPTZ NULL;

@@ -14,7 +14,7 @@ build:
 	podman build -t metacritic-game-tracker-app:latest .
 
 migrate:
-	poetry run alembic upgrade head
+	poetry run python scripts/migrate.py
 
 test:
 	poetry run pytest tests/ -q

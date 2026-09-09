@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "5434:5432"
+      - "5440:5432"
     volumes:
       - metacritic_game_tracker_db:/var/lib/postgresql/data
     healthcheck:
@@ -20,6 +20,8 @@ services:
       retries: 5
       start_period: 60s
 
+  # Веб-сервер: только читает данные и отдаёт UI. Ингестию не запускает —
+  # иначе каждый воркер uvicorn/gunicorn поднял бы свой планировщик.
   app:
     image: ${CI_REGISTRY_IMAGE:-metacritic-game-tracker-app}:latest
     build: .
@@ -28,12 +30,34 @@ services:
       db:
         condition: service_started
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file:
       - .env
+    environment:
+      # .env содержит host-значение (localhost:5439) для локальной разработки;
+      # внутри сети compose база доступна как db:5432
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
     volumes:
       - ./logs:/app/logs
     command: ["python", "main.py"]
+
+  # Планировщик ингестии — отдельный процесс, ровно один экземпляр.
+  # Срок следующего прогона считается от последнего успешного прогона в БД,
+  # поэтому рестарт контейнера не сбрасывает расписание.
+  worker:
+    image: ${CI_REGISTRY_IMAGE:-metacritic-game-tracker-app}:latest
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
+    volumes:
+      - ./logs:/app/logs
+    command: ["python", "scripts/run_scheduler.py"]
 
 volumes:
   metacritic_game_tracker_db:

@@ -30,18 +30,3 @@ CREATE TABLE IF NOT EXISTS pipeline_rejects (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_rejects_reason ON pipeline_rejects(stage, reason_code, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS pipeline_findings (
-    id           SERIAL PRIMARY KEY,
-    fingerprint  TEXT        NOT NULL UNIQUE,
-    stage        TEXT        NOT NULL,
-    title        TEXT        NOT NULL,
-    evidence     JSONB       NOT NULL DEFAULT '{}',
-    probe        TEXT,
-    state        TEXT        NOT NULL DEFAULT 'open'
-                   CHECK (state IN ('open','confirmed','refuted','in-progress','fixed','wontfix')),
-    seen_count   INTEGER     NOT NULL DEFAULT 1,
-    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at   TIMESTAMPTZ
-);

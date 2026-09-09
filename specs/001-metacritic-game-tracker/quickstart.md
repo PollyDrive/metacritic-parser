@@ -24,13 +24,18 @@ poetry run python scripts/migrate.py
 
 ## 3. Run the service
 
+Two processes (research.md §3) — the web tier never ingests, the worker never serves HTTP:
+
 ```bash
-poetry run python main.py
+poetry run python main.py               # web tier → http://localhost:8000
+poetry run python scripts/run_scheduler.py   # worker: hourly ingest + enrichment backfill
 ```
+
+Or both at once via `make up` (`app` + `worker` services in `docker-compose.yml`).
 
 ## 4. Validate User Story 1 — Browse Catalog
 
-1. Trigger one ingestion run manually (see step 6, or wait for the hourly scheduler).
+1. Trigger one ingestion run manually (see step 8, or wait for the worker's hourly tick).
 2. Open `http://localhost:8000/games` — expect a list with at least one game, showing
    title, cover image, and platform score(s).
 3. Click a game → expect the detail card with developer, description, video link,
@@ -66,6 +71,11 @@ playthrough, confirm the card renders normally with no error and no takeaway sec
 1. Authenticate with `MONITORING_USERNAME`/`PASSWORD` at `http://localhost:8000/monitoring`.
 2. Press the manual-run control → `POST /monitoring/run` → expect `202` and the status
    view to update live (via the SSE stream) without a page refresh.
+3. Open `http://localhost:8000/monitoring/config`, change `ingest.games_per_run` to `5`,
+   save, and confirm the next run processes 5 games — with no restart.
+4. Try saving `scraper.request_delay_seconds = 0` → expect rejection with an explanation
+   and the previous value still in effect (FR-026).
+5. Confirm both pages return `401` in a logged-out/private window.
 
 ## 9. Full quality gate (Constitution Principle IV)
 

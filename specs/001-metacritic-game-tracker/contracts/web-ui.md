@@ -27,7 +27,7 @@ review summary, similar games section (FR-016/017, empty section if none qualify
 Cases), playthrough takeaway if present (US4, optional scope — section omitted entirely
 when absent, not shown empty).
 
-## Monitoring (US5, optional scope) — basic auth required (FR-022)
+## Operator console (US5) — basic auth required (FR-022, FR-026)
 
 Protected by HTTP Basic Auth against `MONITORING_USERNAME` / `MONITORING_PASSWORD`
 (`.env`). `401` with `WWW-Authenticate` challenge if missing/wrong credentials.
@@ -45,6 +45,30 @@ research.md §2).
 
 ### `POST /monitoring/run`
 
-Triggers `IngestGamesUseCase` immediately, outside the hourly schedule (FR-020). Returns
-`202 Accepted` with the new `pipeline_runs.id`; `409 Conflict` if a run is already in
-progress (edge case: no overlapping runs).
+Requests an immediate ingestion run, outside the hourly schedule (FR-020). The web tier does
+**not** execute the run — it inserts a `run_requests` row that the worker process consumes on
+its next poll (research.md §3). Returns `202 Accepted` with the `run_requests.id`;
+`409 Conflict` if an `ingest` run is currently `running` or an unconsumed request already
+exists (edge case: no overlapping runs). The `/monitoring/stream` SSE feed is how the caller
+observes the run actually starting.
+
+A manual run bypasses the active-hours window and the `ingest.enabled` switch — it is an
+explicit human instruction, not a scheduled tick.
+
+### `GET /monitoring/config`
+
+Settings page (FR-025). Renders every `runtime_config` key with its current value, permitted
+range, description, and who last changed it. Secrets are not present in this table and are
+never rendered here (FR-026).
+
+### `POST /monitoring/config`
+
+Saves changed settings. Each submitted value is validated **server-side** against its
+`value_type` and `min_value`/`max_value` before being persisted; out-of-range or wrong-typed
+input returns `422` with per-field messages and leaves every stored value untouched (all-or-
+nothing, so a partial save can't leave the pipeline in a half-retuned state). On success:
+`303 See Other` back to `GET /monitoring/config`, with `updated_at`/`updated_by` recorded per
+changed key. Changes take effect on the worker's next run — no restart (FR-025).
+
+Rejected explicitly: any key not in the seeded `runtime_config` set. The endpoint does not
+create new keys, so it cannot be used to write arbitrary rows.

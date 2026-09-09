@@ -9,7 +9,6 @@ packages = [{ include = "metacritic_game_tracker" }]
 python = ">=3.11,<3.15"
 SQLAlchemy = {version = "^2.0.29", extras = ["asyncio"]}
 asyncpg = "^0.30.0"
-alembic = "^1.13.1"
 pydantic = "^2.6.1"
 pydantic-settings = "^2.2.1"
 python-dotenv = "^1.0.1"
@@ -18,6 +17,10 @@ selectolax = "^0.3.21"
 fastapi = "^0.115.0"
 uvicorn = {version = "^0.32.0", extras = ["standard"]}
 jinja2 = "^3.1.4"
+resend = "^2.43.0"
+python-multipart = "^0.0.32"
+youtube-transcript-api = "^1.2.4"
+tzdata = "^2026.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.2"
