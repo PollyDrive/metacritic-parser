@@ -14,22 +14,41 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from metacritic_game_tracker.infrastructure.config.runtime import RuntimeConfig
-from metacritic_game_tracker.infrastructure.db.models import PipelineRunORM, RunRequestORM
+from metacritic_game_tracker.infrastructure.db.models import (
+    EnrichmentAttemptORM,
+    GameActivityEventORM,
+    GameORM,
+    PipelineRejectORM,
+    PipelineRunORM,
+    PlaythroughTakeawayORM,
+    RunRequestORM,
+)
 from metacritic_game_tracker.infrastructure.db.session import session_scope
 from metacritic_game_tracker.infrastructure.web.auth import require_operator
 
 router = APIRouter()
 
+# A YouTube search actually happened iff the daily budget check passed —
+# these are the two outcomes reachable only past that check (playthrough.py).
+# "budget_exhausted" is NOT in this set: that reject fires *before* any search.
+_SEARCH_ATTEMPTED_REASON_CODES = ("no_candidate_video", "no_transcript")
+
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 ALLOWED_POLL_INTERVALS_SECONDS = {5, 30, 60, 300}
 
 KNOWN_KINDS = ("ingest", "review_refresh", "playthrough")
+
+ENABLE_CONFIG_KEYS = {
+    "ingest": "ingest.enabled",
+    "review_refresh": "enrichment.review_summary_enabled",
+    "playthrough": "enrichment.playthrough_enabled",
+}
 
 RunState = tuple[int, str, str, str | None]
 
@@ -78,6 +97,7 @@ def _format_run(r: PipelineRunORM) -> dict:
     started = r.started_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8") if r.started_at else ""
     finished = r.finished_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8") if r.finished_at else ""
     return {
+        "id": r.id,
         "stage": r.stage,
         "status": r.status,
         "started_at": started,
@@ -85,6 +105,11 @@ def _format_run(r: PipelineRunORM) -> dict:
         "items_in": r.items_in,
         "items_accepted": r.items_accepted,
         "items_rejected": r.items_rejected,
+        # Was missing entirely, so the template's fallback rendered every run's
+        # deferred count as 0 — hiding the single most common outcome: a run
+        # where all 296 items were merely in retry backoff read as "0/0/0",
+        # i.e. as if nothing had happened at all.
+        "items_deferred": r.items_deferred,
         "error_message": r.error_message,
         "current_item": (r.meta or {}).get("current_item"),
     }
@@ -103,27 +128,47 @@ async def monitoring_status(
     )
     latest_result = await session.execute(latest_stmt)
     latest_by_stage = {r.stage: _format_run(r) for r in latest_result.scalars().all()}
-    pipelines = [{"kind": kind, "latest": latest_by_stage.get(kind)} for kind in KNOWN_KINDS]
-
-    from metacritic_game_tracker.infrastructure.db.models import PipelineRejectORM, EnrichmentAttemptORM
+    config = RuntimeConfig(session)
+    pipelines = [
+        {
+            "kind": kind,
+            "latest": latest_by_stage.get(kind),
+            "coverage": None,
+            "enabled": await config.get_bool(ENABLE_CONFIG_KEYS[kind]),
+        }
+        for kind in KNOWN_KINDS
+    ]
 
     history_result = await session.execute(
         select(PipelineRunORM).order_by(PipelineRunORM.started_at.desc()).limit(20)
     )
-    runs = [_format_run(r) for r in history_result.scalars().all()]
+    run_rows = history_result.scalars().all()
 
+    # Unbounded on purpose: the previous 50-row cap silently truncated the
+    # history to roughly one pipeline tick, so an operator could never see
+    # what happened before it — the whole point of these two tabs.
     rejects_result = await session.execute(
-        select(PipelineRejectORM).order_by(PipelineRejectORM.created_at.desc()).limit(50)
+        select(PipelineRejectORM).order_by(PipelineRejectORM.created_at.desc())
     )
     attempts_result = await session.execute(
         select(EnrichmentAttemptORM)
         .where(EnrichmentAttemptORM.last_error.is_not(None))
         .order_by(EnrichmentAttemptORM.last_attempt_at.desc())
-        .limit(50)
     )
-    
+
+    all_rejects = list(rejects_result.scalars().all())
+
     error_log = []
-    for r in rejects_result.scalars().all():
+    failed_runs = [r for r in run_rows if r.status == "failed" and r.error_message]
+    for r in failed_runs:
+        error_log.append({
+            "timestamp": r.started_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
+            "sort_time": r.started_at,
+            "pipeline": r.stage,
+            "item_ref": "Pipeline Run",
+            "error_message": r.error_message
+        })
+    for r in all_rejects:
         error_log.append({
             "timestamp": r.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
             "sort_time": r.created_at,
@@ -139,12 +184,111 @@ async def monitoring_status(
             "item_ref": f"Game ID {a.game_id}",
             "error_message": a.last_error or ""
         })
-        
+
     error_log.sort(key=lambda x: x["sort_time"], reverse=True)
-    error_log = error_log[:50]
+
+    # Chosen UX: expand a run inline (accordion) instead of navigating to a
+    # separate page, so each visible run row carries its own events, scoped
+    # by run_id — not the cross-game activity feed below.
+    run_ids = [r.id for r in run_rows]
+    events_by_run: dict[int, list[GameActivityEventORM]] = {}
+    if run_ids:
+        run_events_result = await session.execute(
+            select(GameActivityEventORM)
+            .where(GameActivityEventORM.run_id.in_(run_ids))
+            .order_by(GameActivityEventORM.created_at.asc())
+        )
+        for event in run_events_result.scalars().all():
+            events_by_run.setdefault(event.run_id, []).append(event)
+
+    # A playthrough run usually produces no activity events at all (nothing was
+    # found), so events alone left those rows with nothing to expand — exactly
+    # the runs an operator most wants to open. Its rejects ARE its detail.
+    visible_run_ids = set(run_ids)
+    rejects_by_run: dict[int, list[PipelineRejectORM]] = {}
+    for reject in all_rejects:
+        if reject.run_id in visible_run_ids:
+            rejects_by_run.setdefault(reject.run_id, []).append(reject)
+
+    # "How many YouTube calls did this run make?" A call happened iff the run
+    # either produced a takeaway (playthrough_generated event) or spent budget
+    # searching and came up empty (no_candidate_video / no_transcript reject) —
+    # both only reachable past the try_spend() budget check, unlike
+    # budget_exhausted which fires before any search.
+    youtube_calls_by_run: dict[int, int] = {}
+    for run_id, rejects in rejects_by_run.items():
+        spent = sum(1 for r in rejects if r.reason_code in _SEARCH_ATTEMPTED_REASON_CODES)
+        if spent:
+            youtube_calls_by_run[run_id] = youtube_calls_by_run.get(run_id, 0) + spent
+    for run_id, events in events_by_run.items():
+        generated = sum(1 for e in events if e.event_type == "playthrough_generated")
+        if generated:
+            youtube_calls_by_run[run_id] = youtube_calls_by_run.get(run_id, 0) + generated
+
+    runs = []
+    for r in run_rows:
+        formatted = _format_run(r)
+        formatted["events"] = [
+            {
+                "time": e.created_at.astimezone(_TZ_DISPLAY).strftime("%H:%M:%S"),
+                "game_title": e.game.title,
+                "game_slug": e.game.metacritic_slug,
+                "event_type": e.event_type,
+                "details": e.details
+            }
+            for e in events_by_run.get(r.id, [])
+        ]
+        formatted["rejects"] = [
+            {
+                "time": rj.created_at.astimezone(_TZ_DISPLAY).strftime("%H:%M:%S"),
+                "item_ref": rj.item_ref,
+                "reason_code": rj.reason_code,
+                "reason_detail": rj.reason_detail or "",
+            }
+            for rj in rejects_by_run.get(r.id, [])
+        ]
+        formatted["youtube_calls"] = youtube_calls_by_run.get(r.id, 0) if r.stage == "playthrough" else None
+        runs.append(formatted)
+
+    # "How many games have a playthrough at all?" (US ask: currently invisible).
+    total_games = (await session.execute(select(func.count()).select_from(GameORM))).scalar_one()
+    games_with_playthrough = (
+        await session.execute(select(func.count(func.distinct(PlaythroughTakeawayORM.game_id))))
+    ).scalar_one()
+    for pipeline in pipelines:
+        if pipeline["kind"] == "playthrough":
+            pipeline["coverage"] = {"covered": games_with_playthrough, "total": total_games}
+
+    activity_result = await session.execute(
+        select(GameActivityEventORM)
+        .order_by(GameActivityEventORM.created_at.desc())
+    )
+    activity_feed = activity_result.scalars().all()
+
+    activity_by_game = {}
+    ordered_activity_groups = []
+    for event in activity_feed:
+        if event.game_id not in activity_by_game:
+            activity_by_game[event.game_id] = []
+            ordered_activity_groups.append({
+                "game": event.game,
+                "latest_time": event.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
+                "events": activity_by_game[event.game_id]
+            })
+        activity_by_game[event.game_id].append({
+            "time": event.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S"),
+            "stage": event.run.stage if event.run else "unknown",
+            "event_type": event.event_type,
+            "details": event.details
+        })
 
     return request.app.state.templates.TemplateResponse(
-        request, "monitoring.html", {"runs": runs, "pipelines": pipelines, "error_log": error_log}
+        request, "monitoring.html", {
+            "runs": runs,
+            "pipelines": pipelines,
+            "error_log": error_log,
+            "activity_groups": ordered_activity_groups
+        }
     )
 
 
@@ -177,6 +321,25 @@ async def monitoring_stream(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+@router.post("/monitoring/toggle")
+async def toggle_pipeline(
+    kind: str = Form(...),
+    enabled: str = Form(...),
+    session: AsyncSession = Depends(get_monitoring_session),
+    operator: str = Depends(require_operator),
+):
+    """Flip one pipeline's enable switch, right from its card on /monitoring —
+    the switches used to live on the generic /monitoring/config table; this
+    is their only home now."""
+    if kind not in ENABLE_CONFIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown pipeline kind: {kind}")
+
+    config = RuntimeConfig(session)
+    await config.set(ENABLE_CONFIG_KEYS[kind], enabled, updated_by=operator)
+    await session.commit()
+    return RedirectResponse(url="/monitoring", status_code=303)
+
+
 @router.post("/monitoring/run")
 async def trigger_run(
     kind: str = "ingest",
@@ -186,18 +349,17 @@ async def trigger_run(
     if kind not in KNOWN_KINDS:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline kind: {kind}")
 
-    if kind == "playthrough":
-        config = RuntimeConfig(session)
-        if not await config.get_bool("enrichment.playthrough_enabled"):
-            raise HTTPException(status_code=409, detail="Playthrough enrichment is disabled")
-
+    # A manual "Run now" always proceeds regardless of that pipeline's own
+    # enable switch (FR-009, feature 003) — the switch only gates the
+    # automatic schedule, enforced in scripts/run_scheduler.py's dispatch,
+    # not here.
     running = await session.execute(
         select(PipelineRunORM).where(PipelineRunORM.status == "running")
     )
     running_row = running.scalars().first()
     if running_row is not None:
         raise HTTPException(
-            status_code=409, 
+            status_code=409,
             detail=f"Wait for the current {running_row.stage} pipeline to finish before starting a new one."
         )
 
@@ -207,7 +369,7 @@ async def trigger_run(
     pending_row = pending.scalars().first()
     if pending_row is not None:
         raise HTTPException(
-            status_code=409, 
+            status_code=409,
             detail=f"Wait for the pending {pending_row.kind} pipeline request to be processed."
         )
 

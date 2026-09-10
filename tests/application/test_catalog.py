@@ -13,22 +13,24 @@ def _game(id_=1, title="Elden Ring"):
 async def test_list_games_returns_games_from_the_repository():
     repo = MagicMock()
     repo.list = AsyncMock(return_value=[_game(1), _game(2)])
+    repo.count_list = AsyncMock(return_value=2)
     use_case = CatalogUseCase(repo)
 
-    games = await use_case.list_games()
+    paginated = await use_case.list_games()
 
-    assert len(games) == 2
-    repo.list.assert_awaited_once_with(platform=None, q=None, sort=None)
+    assert len(paginated.games) == 2
+    repo.list.assert_awaited_once_with(platform=None, q=None, sort=None, limit=50, offset=0)
 
 
 async def test_list_games_passes_filter_search_sort_through():
     repo = MagicMock()
     repo.list = AsyncMock(return_value=[])
+    repo.count_list = AsyncMock(return_value=0)
     use_case = CatalogUseCase(repo)
 
     await use_case.list_games(platform="PC", q="elden", sort="rating")
 
-    repo.list.assert_awaited_once_with(platform="PC", q="elden", sort="rating")
+    repo.list.assert_awaited_once_with(platform="PC", q="elden", sort="rating", limit=50, offset=0)
 
 
 async def test_list_platforms_delegates_to_the_repository():
@@ -45,21 +47,21 @@ async def test_get_game_detail_returns_the_game_and_similar_games():
     game = _game(1)
     similar = [_game(2, "Hades II")]
     repo = MagicMock()
-    repo.get_by_id = AsyncMock(return_value=game)
+    repo.get_by_slug = AsyncMock(return_value=game)
     repo.get_similar_games = AsyncMock(return_value=similar)
     use_case = CatalogUseCase(repo)
 
-    result = await use_case.get_game_detail(1)
+    result = await use_case.get_game_detail(str(game.id))
 
     assert result.game is game
     assert result.similar_games == similar
 
 
-async def test_get_game_detail_returns_none_for_an_unknown_id():
+async def test_get_game_detail_returns_none_for_an_unknown_slug():
     repo = MagicMock()
-    repo.get_by_id = AsyncMock(return_value=None)
+    repo.get_by_slug = AsyncMock(return_value=None)
     use_case = CatalogUseCase(repo)
 
-    result = await use_case.get_game_detail(999)
+    result = await use_case.get_game_detail("unknown-slug")
 
     assert result is None

@@ -34,8 +34,24 @@ Protected by HTTP Basic Auth against `MONITORING_USERNAME` / `MONITORING_PASSWOR
 
 ### `GET /monitoring`
 
-Renders current pipeline status: latest `pipeline_runs` rows, worker state, processed
-counts (FR-019).
+Renders current pipeline status (FR-019). Beyond the latest-run-per-pipeline summary, the
+response includes:
+
+- **Run history**: the last 20 `pipeline_runs` rows across all stages (`ingest`, `review_refresh`,
+  `playthrough`, `detail_backfill`), each expandable (accordion) to show its own
+  `GameActivityEvent` rows and `pipeline_rejects` rows, scoped by `run_id`.
+- **Error log**: every `pipeline_rejects` row and every `enrichment_attempts` row with a non-null
+  `last_error`, merged and sorted newest-first — the operator-facing view of everything that
+  didn't complete cleanly, not bounded to the current run.
+- **Playthrough coverage**: `games_with_playthrough / total_games`, shown against the
+  `playthrough` pipeline's summary row (US ask: "how many games have a playthrough at all").
+- **YouTube call count per run**: for `playthrough`-stage runs, a count of API calls actually
+  spent (derived from `playthrough_generated` events plus `no_candidate_video`/`no_transcript`
+  rejects, both only reachable past the daily-budget check) — distinguishes "ran and found
+  nothing" from "budget exhausted before it could search."
+- **Cross-game activity feed**: every `GameActivityEvent` row, grouped by game, newest-first —
+  independent of the run-history accordion above, this is "what's happened to this game
+  recently" rather than "what happened in this run."
 
 ### `GET /monitoring/stream`
 

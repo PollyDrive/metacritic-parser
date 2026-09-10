@@ -7,6 +7,15 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <header class="site-header">
+    <div style="font-weight: 800; color: var(--accent);">MGT</div>
+    <nav class="site-header-nav">
+      <a href="/games" class="active">Catalog</a>
+      <a href="/monitoring">Monitoring</a>
+      <a href="/monitoring/config">Settings</a>
+    </nav>
+  </header>
+  
   <nav class="crumb"><a href="/games">&larr; Back to catalog</a></nav>
 
   <main class="page">
@@ -28,7 +37,8 @@
         <h1>{{ game.title }}</h1>
         <dl class="meta">
           {% if game.developer %}<div><dt>Developer</dt><dd>{{ game.developer }}</dd></div>{% endif %}
-          {% if game.video_url %}<div><dt>Video</dt><dd><a href="{{ game.video_url }}">Watch</a></dd></div>{% endif %}
+          {% if game.release_date %}<div><dt>Released On</dt><dd>{{ game.release_date.strftime("%Y-%m-%d") }}</dd></div>{% endif %}
+          {% if game.video_url %}<div><dt>Video</dt><dd><a href="{{ game.video_url }}" target="_blank" rel="noopener noreferrer">Watch</a></dd></div>{% endif %}
         </dl>
         {% if game.description %}<p>{{ game.description }}</p>{% endif %}
       </div>
@@ -57,6 +67,13 @@
         {% for summary in game.review_summaries %}
         <div class="review-block">
           <h3>{{ "Critics" if summary.audience == "critic" else "Players" }}</h3>
+          {% if summary.total_reviews_count %}
+          <p class="review-summary-basis">
+            Based on {{ summary.sampled_reviews_count }} of {{ summary.total_reviews_count }} reviews
+            {% if summary.source_platform %}on {{ summary.source_platform }}{% endif %}
+            {% if summary.source_url %} &middot; <a href="{{ summary.source_url }}" target="_blank" rel="noopener noreferrer">see all on Metacritic</a>{% endif %}
+          </p>
+          {% endif %}
           {% set parsed = summary.summary_text | fromjson %}
           
           {% if parsed.pros %}
@@ -90,7 +107,7 @@
     <section class="block">
       <h2>Playthrough Takeaway</h2>
       <p>{{ game.playthrough_takeaway.takeaway_text }}</p>
-      <p><a href="{{ game.playthrough_takeaway.video_url }}">Watch the playthrough</a></p>
+      <p><a href="{{ game.playthrough_takeaway.video_url }}" target="_blank" rel="noopener noreferrer">Watch the playthrough</a></p>
     </section>
     {% endif %}
 
@@ -99,7 +116,7 @@
       <h2>Similar Games</h2>
       <ul class="similar-games">
         {% for similar in similar_games %}
-        <li><a href="/games/{{ similar.id }}">{{ similar.title }}</a></li>
+        <li><a href="/games/{{ similar.metacritic_slug }}">{{ similar.title }}</a></li>
         {% endfor %}
       </ul>
     </section>

@@ -47,8 +47,8 @@ class CatalogUseCase:
     async def list_platforms(self) -> list[str]:
         return await self._game_repo.list_platforms()
 
-    async def get_game_detail(self, game_id: int) -> GameDetail | None:
-        game = await self._game_repo.get_by_id(game_id)
+    async def get_game_detail(self, slug: str) -> GameDetail | None:
+        game = await self._game_repo.get_by_slug(slug)
         if game is None:
             return None
         similar = await self._game_repo.get_similar_games(game)

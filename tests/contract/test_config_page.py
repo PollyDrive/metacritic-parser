@@ -42,6 +42,28 @@ def app():
     return create_app()
 
 
+def test_pipeline_enable_switches_are_not_shown_here_anymore(app):
+    """They moved to /monitoring, right on each pipeline's own card, so an
+    operator can see 'is it on' and 'is it running' in one place."""
+    rows = [
+        _row("ingest.enabled", "true", "bool"),
+        _row("enrichment.review_summary_enabled", "true", "bool"),
+        _row("enrichment.playthrough_enabled", "false", "bool"),
+        _row("ingest.games_per_run", "20", "int", 1, 100),
+    ]
+    session = _session_with(rows)
+    app.dependency_overrides[get_config_session] = lambda: session
+    test_client = TestClient(app)
+
+    response = test_client.get("/monitoring/config", auth=AUTH)
+
+    assert response.status_code == 200
+    assert "ingest.enabled" not in response.text
+    assert "enrichment.review_summary_enabled" not in response.text
+    assert "enrichment.playthrough_enabled" not in response.text
+    assert "ingest.games_per_run" in response.text
+
+
 def test_valid_change_is_persisted_and_redirects(app):
     row = _row("ingest.games_per_run", "20", "int", 1, 100)
     session = _session_with([row])

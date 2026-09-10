@@ -19,9 +19,9 @@ def _session(running=None, pending=None, playthrough_enabled=True):
     session = AsyncMock()
 
     running_result = MagicMock()
-    running_result.scalar_one_or_none.return_value = running
+    running_result.scalars.return_value.first.return_value = running
     pending_result = MagicMock()
-    pending_result.scalar_one_or_none.return_value = pending
+    pending_result.scalars.return_value.first.return_value = pending
     session.execute.side_effect = [running_result, pending_result]
 
     config_row = MagicMock()
@@ -66,7 +66,8 @@ def test_post_run_defaults_to_ingest_when_kind_is_omitted(app):
 
 
 def test_post_run_returns_409_when_that_pipeline_is_already_running(app):
-    session = _session(running=1, pending=None)
+    running_row = MagicMock(stage="ingest")
+    session = _session(running=running_row, pending=None)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 
@@ -77,7 +78,8 @@ def test_post_run_returns_409_when_that_pipeline_is_already_running(app):
 
 
 def test_post_run_returns_409_when_a_request_of_that_kind_is_already_pending(app):
-    session = _session(running=None, pending=7)
+    pending_row = MagicMock(kind="ingest")
+    session = _session(running=None, pending=pending_row)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 
@@ -97,12 +99,16 @@ def test_post_run_rejects_an_unknown_kind(app):
     assert response.status_code == 400
 
 
-def test_post_run_rejects_playthrough_when_the_feature_is_disabled(app):
+def test_post_run_allows_playthrough_even_when_the_feature_is_disabled(app):
+    """FR-009: a manual, operator-initiated run of a pipeline proceeds
+    regardless of that pipeline's own enable switch — the worker (not this
+    route) is where the switch is actually enforced, and only for the
+    scheduled cadence."""
     session = _session(running=None, pending=None, playthrough_enabled=False)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 
     response = test_client.post("/monitoring/run", params={"kind": "playthrough"}, auth=AUTH)
 
-    assert response.status_code == 409
-    session.add.assert_not_called()
+    assert response.status_code == 202
+    session.add.assert_called_once()

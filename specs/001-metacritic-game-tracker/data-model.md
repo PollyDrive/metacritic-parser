@@ -228,6 +228,28 @@ process (research.md §3) — the web service never runs ingestion in-process.
 **Validation**: `POST /monitoring/run` returns `409` when an `ingest` run is currently
 `running` or an unconsumed request already exists (contracts/web-ui.md).
 
+## GameActivityEvent
+
+Append-only per-game event log (`sql/migrations/008_game_activity_events.sql`), added after
+this document's original Phase 1 pass to back the monitoring page's per-run accordion and
+cross-game activity feed (contracts/web-ui.md) — an event row is written by `application/ingest.py`,
+`application/enrichment.py`, and `application/playthrough.py` whenever something worth showing an
+operator happens to a game (e.g. `event_type='review_refresh'` with the audience, platform, and
+review-count delta; `event_type='playthrough_generated'` with the source video URL).
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | serial PK | |
+| `game_id` | FK → Game, not null | |
+| `run_id` | FK → `pipeline_runs.id`, nullable | which run produced this event, if any |
+| `event_type` | text, not null | e.g. `review_refresh`, `playthrough_generated` |
+| `created_at` | timestamptz, not null default now() | |
+| `details` | jsonb, not null default `{}` | event-specific payload (see call sites above) |
+
+**Validation**: none beyond `game_id`/`event_type` presence — this is a log, not a state machine;
+nothing reads it back to make a decision (`application/enrichment.py`'s "first pass" lookup reads
+its own prior rows for display purposes only).
+
 ## YoutubeQuotaUsage *(optional scope, US4)*
 
 Persisted daily spend against the YouTube Data API budget (research.md §6). Persisted rather

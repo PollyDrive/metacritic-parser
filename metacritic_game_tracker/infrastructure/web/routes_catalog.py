@@ -1,7 +1,7 @@
 """US1-3 catalog endpoints (contracts/web-ui.md) — no auth."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 router = APIRouter()
@@ -31,10 +31,10 @@ async def list_games(
     platform: str | None = None,
     q: str | None = None,
     sort: str | None = "rating",
-    page: int = 1,
+    page: int = Query(default=1, ge=1),
     use_case=Depends(get_catalog_use_case),
 ):
-    paginated = await use_case.list_games(platform=platform, q=q, sort=sort, page=page, page_size=24)
+    paginated = await use_case.list_games(platform=platform, q=q, sort=sort, page=page, page_size=20)
     platforms = await use_case.list_platforms()
     return request.app.state.templates.TemplateResponse(
         request,
@@ -50,9 +50,9 @@ async def list_games(
     )
 
 
-@router.get("/games/{game_id}", response_class=HTMLResponse)
-async def game_detail(request: Request, game_id: int, use_case=Depends(get_catalog_use_case)):
-    detail = await use_case.get_game_detail(game_id)
+@router.get("/games/{slug}", response_class=HTMLResponse)
+async def game_detail(request: Request, slug: str, use_case=Depends(get_catalog_use_case)):
+    detail = await use_case.get_game_detail(slug)
     if detail is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return request.app.state.templates.TemplateResponse(

@@ -7,7 +7,14 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <nav class="crumb"><a href="/">&larr; Metacritic Game Tracker</a></nav>
+  <header class="site-header">
+    <div style="font-weight: 800; color: var(--accent);">MGT</div>
+    <nav class="site-header-nav">
+      <a href="/games" class="active">Catalog</a>
+      <a href="/monitoring">Monitoring</a>
+      <a href="/monitoring/config">Settings</a>
+    </nav>
+  </header>
 
   <main class="page">
     <h1>Games</h1>
@@ -37,7 +44,7 @@
     <ul class="game-list">
       {% for game in games %}
       <li>
-        <a class="cover" href="/games/{{ game.id }}">
+        <a class="cover" href="/games/{{ game.metacritic_slug }}">
           {% if game.cover_image_url %}
           <img src="{{ game.cover_image_url }}" alt="{{ game.title }}"
                onerror="this.hidden=true; this.nextElementSibling.hidden=false;">
@@ -50,12 +57,13 @@
           </div>
           {% endif %}
         </a>
-        <a class="title" href="/games/{{ game.id }}">{{ game.title }}</a>
+        <a class="title" href="/games/{{ game.metacritic_slug }}">{{ game.title }}</a>
         <div class="overall-scores">
           {% set cr_scores = game.platform_scores | map(attribute='metascore') | reject('none') | list %}
           {% set overall_cr = cr_scores | max if cr_scores else none %}
-          {% set overall_ur = game.platform_scores[0].userscore if game.platform_scores else none %}
-          
+          {% set ur_scores = game.platform_scores | map(attribute='userscore') | reject('none') | list %}
+          {% set overall_ur = ur_scores | max if ur_scores else none %}
+
           <div class="score-block critic">
             <span class="score-label">CR</span>
             <span class="score-value {% if overall_cr is not none %}{{ 'score--good' if overall_cr >= 75 else 'score--mixed' if overall_cr >= 50 else 'score--bad' }}{% else %}score--unknown{% endif %}">
@@ -80,13 +88,6 @@
             </span>
           {% endfor %}
         </div>
-        {% if game.review_summaries %}
-        <div class="badges-row">
-          {% for summary in game.review_summaries|sort(attribute='audience') %}
-            <span class="review-badge {{ summary.audience }}">{{ "CR" if summary.audience == "critic" else "UR" }}</span>
-          {% endfor %}
-        </div>
-        {% endif %}
       </li>
       {% endfor %}
       </ul>

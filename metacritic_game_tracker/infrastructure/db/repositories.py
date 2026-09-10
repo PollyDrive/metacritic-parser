@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from metacritic_game_tracker.domain.rules import IngestState
@@ -30,7 +30,15 @@ class GameRepository:
         now = datetime.now(UTC)
 
         if existing is None:
-            existing = GameORM(metacritic_id=parsed.metacritic_id, first_seen_at=now)
+            # `platform_scores=[]` here isn't a no-op default: without it, this
+            # object's very first access of `.platform_scores` happens AFTER
+            # `upsert_platform_scores`'s own query has already autoflushed this
+            # pending INSERT (assigning it a real id) — a persistent-but-never-
+            # loaded selectin relationship then triggers a genuine lazy load on
+            # first touch, which a synchronous `.append()` can't await
+            # (sqlalchemy.exc.MissingGreenlet). Assigning the collection up
+            # front marks it loaded before that can happen.
+            existing = GameORM(metacritic_id=parsed.metacritic_id, first_seen_at=now, platform_scores=[])
             self._session.add(existing)
 
         existing.metacritic_slug = parsed.metacritic_slug
@@ -56,12 +64,26 @@ class GameRepository:
             if row is None:
                 row = PlatformScoreORM(game_id=game.id, platform=p.platform)
                 self._session.add(row)
+                # `platform_scores` is lazy="selectin" — eagerly loaded once
+                # when the game was fetched, then cached. session.add() alone
+                # never updates that already-cached Python-side list, so any
+                # code reading game.platform_scores right after this call
+                # (e.g. review-refresh's per-platform sampling) would see it
+                # as empty for a brand-new game even though the row was just
+                # written.
+                game.platform_scores.append(row)
             row.metascore = p.metascore
             row.userscore = p.userscore
             row.updated_at = now
 
     async def get_by_id(self, game_id: int) -> GameORM | None:
         return await self._session.get(GameORM, game_id)
+
+    async def get_by_slug(self, slug: str) -> GameORM | None:
+        result = await self._session.execute(
+            select(GameORM).where(GameORM.metacritic_slug == slug)
+        )
+        return result.scalar_one_or_none()
 
     async def has_review_summary(self, game_id: int, audience: str) -> bool:
         result = await self._session.execute(
@@ -85,12 +107,19 @@ class GameRepository:
         if q:
             stmt = stmt.where(GameORM.title.ilike(f"%{q}%"))
         if sort == "rating":
-            stmt = stmt.outerjoin(PlatformScoreORM).order_by(
-                PlatformScoreORM.metascore.desc().nulls_last(), GameORM.id.desc()
+            # A game with N platforms otherwise contributes N rows to this
+            # join — GROUP BY collapses that back to one row per game *before*
+            # LIMIT is applied, so a page never comes back short just because
+            # some of its games are multi-platform. Reuse the platform-filter
+            # join above when present instead of adding a second one.
+            if not platform:
+                stmt = stmt.outerjoin(PlatformScoreORM)
+            stmt = stmt.group_by(GameORM.id).order_by(
+                func.max(PlatformScoreORM.metascore).desc().nulls_last(), GameORM.id.desc()
             )
         else:
             stmt = stmt.order_by(GameORM.id.desc())
-            
+
         stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())

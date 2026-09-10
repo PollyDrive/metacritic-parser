@@ -3,8 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from metacritic_game_tracker.application.backfill import BackfillEnrichmentUseCase
-from metacritic_game_tracker.infrastructure.db.models import EnrichmentAttemptORM, GameORM
+from metacritic_game_tracker.application.backfill import (
+    BackfillEnrichmentUseCase,
+    RunBudgetExhausted,
+)
+from metacritic_game_tracker.infrastructure.db.models import (
+    EnrichmentAttemptORM,
+    GameORM,
+    PipelineRejectORM,
+)
 
 
 def _config(max_attempts=5, backoff_base_minutes=30):
@@ -105,6 +112,82 @@ async def test_games_missing_for_playthrough_orders_by_best_metascore_then_recen
     assert "first_seen_at" in compiled
 
 
+async def test_games_missing_for_detail_fields_targets_missing_recoverable_columns(mock_session):
+    """FR-028: description/developer/cover_image are recoverable gaps that must
+    be queued for re-extraction, not silently left unfilled."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case._games_missing("detail_fields")
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "description" in compiled
+    assert "developer" in compiled
+    assert "cover_image_url" in compiled
+
+
+async def test_games_missing_for_review_steps_orders_youngest_first_and_respects_a_limit(mock_session):
+    """FR-012: when a pass can't process every due game, younger games go
+    first — mirrors the existing playthrough ordering test above."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case._games_missing("critic_summary", limit=20)
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "order by" in compiled
+    assert "first_seen_at" in compiled
+    assert "limit 20" in compiled
+
+
+async def test_games_missing_without_a_limit_is_unbounded(mock_session):
+    """detail_backfill/playthrough callers don't pass a cap — today's
+    unbounded behavior for them must not change."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case._games_missing("user_summary")
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit" not in compiled
+
+
+async def test_run_threads_games_per_run_through_to_games_missing_as_the_limit(mock_session):
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case.run(AsyncMock(), stage="review_refresh", steps=("critic_summary",), games_per_run=20)
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit 20" in compiled
+
+
+async def test_run_without_games_per_run_stays_unbounded(mock_session):
+    """detail_backfill/playthrough callers omit games_per_run entirely."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case.run(AsyncMock(), stage="detail_backfill", steps=("detail_fields",))
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit" not in compiled
+
+
 async def test_run_creates_and_completes_its_own_pipeline_run_row(mock_session):
     """Each pipeline gets its own visible pipeline_runs row (monitoring shows
     independent status per pipeline, not one shared 'backfill' blob)."""
@@ -128,12 +211,12 @@ async def test_run_counts_items_in_and_items_accepted(mock_session):
     game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None)]
 
     use_case._games_missing = fake_games_missing
 
-    async def do_work(step, game):
+    async def do_work(step, game, run_id):
         if game.id == 2:
             raise RuntimeError("boom")
 
@@ -141,6 +224,65 @@ async def test_run_counts_items_in_and_items_accepted(mock_session):
 
     assert run_row.items_in == 2
     assert run_row.items_accepted == 1
+
+
+async def test_run_does_not_count_a_no_op_result_as_accepted(mock_session):
+    """Real bug, caught live: playthrough's do_work returns False for "no
+    findable playthrough" — a normal outcome (budget exhausted, no video, no
+    transcript), not an error, so process_game_step doesn't raise/retry it.
+    But the OLD code discarded the return value entirely and always counted
+    it as accepted — 134/134 "accepted" in monitoring with zero rows actually
+    written anywhere. Only a real product (return value not explicitly False)
+    counts toward items_accepted."""
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+    game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
+    game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
+
+    async def fake_games_missing(step, limit=None):
+        return [(game1, None), (game2, None)]
+
+    use_case._games_missing = fake_games_missing
+
+    async def do_work(step, game, run_id):
+        return game.id == 1  # game1 finds a playthrough, game2 finds nothing
+
+    run_row = await use_case.run(do_work, stage="playthrough", steps=("playthrough",))
+
+    assert run_row.items_in == 2
+    assert run_row.items_accepted == 1
+
+
+async def test_run_stops_early_and_records_one_reject_when_do_work_signals_budget_exhausted(mock_session):
+    """Real bug, caught live: playthrough's do_work returned False (silently)
+    for every remaining game once the daily YouTube quota ran out — 134 games
+    all looping through fetches that could never succeed, and the Errors Log
+    stayed completely empty (a returned False isn't an exception, so nothing
+    ever reached pipeline_rejects), making a 0-accepted run look causeless.
+    do_work now raises RunBudgetExhausted once, backfill stops iterating
+    immediately and records exactly ONE reject — not one per remaining game."""
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+    game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
+    game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
+    game3 = GameORM(id=3, metacritic_id=3, metacritic_slug="g3", title="G3")
+
+    async def fake_games_missing(step, limit=None):
+        return [(game1, None), (game2, None), (game3, None)]
+
+    use_case._games_missing = fake_games_missing
+
+    async def do_work(step, game, run_id):
+        if game.id == 2:
+            raise RunBudgetExhausted("daily YouTube quota exhausted")
+        return True
+
+    run_row = await use_case.run(do_work, stage="playthrough", steps=("playthrough",))
+
+    assert run_row.items_in == 2  # game1 processed, game2 triggered the stop — game3 never reached
+    assert run_row.items_accepted == 1
+    reject_rows = [c.args[0] for c in mock_session.add.call_args_list if isinstance(c.args[0], PipelineRejectORM)]
+    assert len(reject_rows) == 1
+    assert reject_rows[0].reason_code == "budget_exhausted"
+    assert reject_rows[0].item_ref == "2"
 
 
 async def test_run_updates_current_item_in_meta_as_it_processes_each_game(mock_session):
@@ -152,7 +294,7 @@ async def test_run_updates_current_item_in_meta_as_it_processes_each_game(mock_s
     game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="Elden Ring")
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="Valheim")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None)]
 
     use_case._games_missing = fake_games_missing

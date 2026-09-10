@@ -257,3 +257,13 @@ Carried forward from revision 3 (architecture review #1 + live inspection of Met
 4. + User Story 3 → similar games (completes mandatory scope per spec.md)
 5. + User Story 4 → playthrough takeaways (optional scope)
 6. + User Story 5 → operator console (optional scope)
+
+---
+
+## Phase 9: Convergence
+
+- [X] T074 CRITICAL — Compute and persist `llm_calls.cost_usd` from `meta.llm_model_costs` (rate × `input_tokens`/`output_tokens`) at insert time in `application/enrichment.py` and `application/playthrough.py`, instead of leaving it at its ORM default of `0` — the project's sole real observability table is dead on arrival without this per Constitution (constitution: Security & Data Handling) (missing)
+- [X] T075 Make playthrough video selection match FR-018 ("most popular ... playthrough video"): either select by `view_count` in `infrastructure/youtube/playthrough_finder.py`'s `find_most_relevant_playthrough` (currently returns `candidates[0]`, search-relevance order) and update `tests/infrastructure/youtube/test_playthrough_finder.py` accordingly, or reword FR-018 to state relevance-based selection and align tasks.md's T054 description — pick one, make code/test/spec agree per FR-018 (contradicts)
+- [X] T076 Add a `GameActivityEvent` entity section to data-model.md documenting the `game_activity_events` table (`sql/migrations/008_game_activity_events.sql`), already used by `routes_monitoring.py`, `application/ingest.py`, `application/enrichment.py`, `application/playthrough.py` per plan.md's Phase 1 output (missing)
+- [X] T077 Expand contracts/web-ui.md's `GET /monitoring` section to document the error log, per-run reject/event accordion, playthrough coverage percentage, and cross-game activity feed actually rendered by `routes_monitoring.py`'s `monitoring_status` per plan.md's Phase 1 output (partial)
+- [X] T078 Reword FR-005 in spec.md to state the always-recheck-"See All"-page-1 drift-correction behavior implemented in `domain/rules.py`'s `plan_ingest()` (topup runs every subsequent-day run, not only on a New-Releases shortfall) (contradicts)

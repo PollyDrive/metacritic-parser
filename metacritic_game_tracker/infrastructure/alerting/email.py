@@ -6,17 +6,28 @@ which is enough for a single-operator alert channel.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 import resend
 
+log = logging.getLogger(__name__)
+
 
 def send_alert_email(subject: str, body: str) -> None:
-    resend.api_key = os.environ["RESEND_API_KEY"]
+    api_key = os.environ.get("RESEND_API_KEY")
+    recipient = os.environ.get("ALERT_EMAIL_TO")
+    if not api_key or not recipient:
+        # A deployment that hasn't configured the alert channel still runs; the
+        # underlying failure is already logged CRITICAL by its own caller.
+        log.warning("Alert email not sent — RESEND_API_KEY/ALERT_EMAIL_TO unset: %s", subject)
+        return
+
+    resend.api_key = api_key
     resend.Emails.send(
         {
             "from": "onboarding@resend.dev",
-            "to": os.environ["ALERT_EMAIL_TO"],
+            "to": recipient,
             "subject": f"[metacritic-game-tracker] {subject}",
             "text": body,
         }

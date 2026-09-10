@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from metacritic_game_tracker.infrastructure.scraper.parser import build_parsed_game, parse_game_page
+from metacritic_game_tracker.infrastructure.scraper.parser import (
+    _find_title_userscore,
+    build_parsed_game,
+    parse_game_page,
+)
 from metacritic_game_tracker.infrastructure.scraper.payload import extract_payload_array, resolve
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -70,6 +74,39 @@ def test_build_parsed_game_treats_a_missing_userscore_as_none_not_zero():
     parsed = build_parsed_game(game)
 
     assert parsed.platforms[0].userscore is None
+
+
+def test_find_title_userscore_resolves_the_self_reference_id_before_comparing():
+    """Real bug, caught live against elden-ring's actual page: the self-
+    referencing carousel entry's own `id` field is itself an unresolved
+    devalue index (not the real integer game id) until resolved — comparing
+    it to `metacritic_id` directly, unresolved, never matches any real game,
+    so every userscore extraction silently returned None. `array[1]["id"]`
+    below is `0`, an index pointing at `array[0]` (the real id 1300501979),
+    not the id itself — mirrors the live payload's actual shape."""
+    array = [
+        1300501979,
+        {"id": 0, "userScore": 2},
+        {"score": 8.4},
+    ]
+
+    userscore = _find_title_userscore(array, metacritic_id=1300501979)
+
+    assert userscore == 8.4
+
+
+def test_find_title_userscore_returns_none_when_no_self_reference_exists():
+    """A different game's entry (a related-carousel neighbor, not a
+    self-reference) must not match."""
+    array = [
+        999999,
+        {"id": 0, "userScore": 2},
+        {"score": 5.0},
+    ]
+
+    userscore = _find_title_userscore(array, metacritic_id=1300501979)
+
+    assert userscore is None
 
 
 def test_build_parsed_game_handles_a_missing_video_link():

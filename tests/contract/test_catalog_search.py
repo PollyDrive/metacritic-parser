@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from metacritic_game_tracker.application.catalog import PaginatedGames
 from metacritic_game_tracker.infrastructure.db.models import GameORM
 from metacritic_game_tracker.infrastructure.web.app import create_app
 from metacritic_game_tracker.infrastructure.web.routes_catalog import get_catalog_use_case
@@ -28,10 +29,12 @@ def client():
 
 def test_q_query_param_is_passed_through_to_the_use_case(client):
     test_client, use_case = client
-    use_case.list_games = AsyncMock(return_value=[_game(1, "Elden Ring")])
+    use_case.list_games = AsyncMock(
+        return_value=PaginatedGames(games=[_game(1, "Elden Ring")], total_count=1, total_pages=1, current_page=1)
+    )
 
     response = test_client.get("/games", params={"q": "elden"})
 
     assert response.status_code == 200
-    use_case.list_games.assert_awaited_once_with(platform=None, q="elden", sort="rating")
+    use_case.list_games.assert_awaited_once_with(platform=None, q="elden", sort="rating", page=1, page_size=20)
     assert "Elden Ring" in response.text

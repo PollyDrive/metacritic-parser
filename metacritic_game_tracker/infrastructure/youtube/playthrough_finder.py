@@ -1,5 +1,6 @@
-"""Pick the most relevant playthrough candidate for a game title — the first
-result by YouTube search's own relevance ranking.
+"""Pick the most popular playthrough candidate for a game title — the
+highest view_count among the search results (FR-018: "its most popular ...
+playthrough video").
 
 `search_videos` is injected so this stays unit-testable without a real YouTube
 Data API call — mirrors the fetch-injection pattern in application/ingest.py.
@@ -30,4 +31,4 @@ async def find_most_relevant_playthrough(
     candidates = await search_videos(f"{game_title} playthrough")
     if not candidates:
         return None
-    return candidates[0]
+    return max(candidates, key=lambda c: c.view_count)

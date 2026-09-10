@@ -17,7 +17,11 @@ from datetime import date, datetime
 from metacritic_game_tracker.domain.models import GameStub, PlatformScore
 from metacritic_game_tracker.infrastructure.scraper.payload import extract_payload_array, resolve
 
-_GAME_HREF_RE = re.compile(r'href="/game/([a-z0-9-]+)/"')
+_GAME_ANCHOR_RE = re.compile(r'<a\b([^>]*?)href="/game/([a-z0-9-]+)/"', re.IGNORECASE)
+# Metacritic's site header carries a "New Releases" nav dropdown of game links,
+# identical on every browse page. Counting those as results re-ingested the
+# same handful of games on every single run, forever.
+_CHROME_ANCHOR_MARKER = "c-site-header"
 
 
 @dataclass(frozen=True)
@@ -44,13 +48,23 @@ def _find_game_root_index(array: list) -> int | None:
 def _find_title_userscore(array: list, metacritic_id: int) -> float | None:
     """Best-effort: some payloads embed a self-referencing copy of the game (inside
     the related-carousel results) that carries a title-level userScore. Absent is
-    normal, not an error — treated the same as a "tbd" score."""
+    normal, not an error — treated the same as a "tbd" score.
+
+    `v["id"]` at this point is still an unresolved devalue index (array[i] is the
+    raw entry, not yet dereferenced) — comparing it to `metacritic_id` directly
+    always failed, silently, for every game (caught live: elden-ring has a real
+    8.4 userscore this returned None for). Resolve it before comparing."""
     for i, v in enumerate(array):
-        if isinstance(v, dict) and v.get("id") == metacritic_id and "userScore" in v:
-            resolved = resolve(array, i)
-            score = (resolved.get("userScore") or {}).get("score")
-            if score is not None:
-                return float(score)
+        if not (isinstance(v, dict) and "id" in v and "userScore" in v):
+            continue
+        raw_id = v["id"]
+        resolved_id = resolve(array, raw_id) if isinstance(raw_id, int) else raw_id
+        if resolved_id != metacritic_id:
+            continue
+        resolved = resolve(array, i)
+        score = (resolved.get("userScore") or {}).get("score")
+        if score is not None:
+            return float(score)
     return None
 
 
@@ -150,8 +164,10 @@ def list_games(html: str) -> list[GameStub]:
     payload doesn't carry a structured game array in the form we expect."""
     slugs: list[str] = []
     seen: set[str] = set()
-    for match in _GAME_HREF_RE.finditer(html):
-        slug = match.group(1)
+    for match in _GAME_ANCHOR_RE.finditer(html):
+        if _CHROME_ANCHOR_MARKER in match.group(1):
+            continue
+        slug = match.group(2)
         if slug not in seen:
             seen.add(slug)
             slugs.append(slug)
