@@ -50,9 +50,9 @@ async def list_games(
     )
 
 
-@router.get("/games/{game_id}", response_class=HTMLResponse)
-async def game_detail(request: Request, game_id: int, use_case=Depends(get_catalog_use_case)):
-    detail = await use_case.get_game_detail(game_id)
+@router.get("/games/{slug}", response_class=HTMLResponse)
+async def game_detail(request: Request, slug: str, use_case=Depends(get_catalog_use_case)):
+    detail = await use_case.get_game_detail(slug)
     if detail is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return request.app.state.templates.TemplateResponse(

@@ -88,7 +88,7 @@
                     {% for event in run.events %}
                     <tr>
                       <td style="white-space: nowrap">{{ event.created_at.strftime("%H:%M:%S") }}</td>
-                      <td><a href="/games/{{ event.game.id }}">{{ event.game.title }}</a></td>
+                      <td><a href="/games/{{ event.game.metacritic_slug }}">{{ event.game.title }}</a></td>
                       <td><span class="pipeline-badge">{{ event.event_type }}</span></td>
                       <td>
                         {% if event.event_type == "review_refresh" %}
@@ -145,7 +145,7 @@
               <td style="white-space: nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</td>
               <td><span class="pipeline-badge">{{ event.run.stage if event.run else "unknown" }}</span></td>
               <td>{{ event.event_type }}</td>
-              <td><a href="/games/{{ event.game.id }}">{{ event.game.title }}</a></td>
+              <td><a href="/games/{{ event.game.metacritic_slug }}">{{ event.game.title }}</a></td>
               <td>
                 {% if event.details %}
                   {% if event.event_type == "review_refresh" %}

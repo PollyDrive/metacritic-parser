@@ -107,7 +107,7 @@
       <h2>Similar Games</h2>
       <ul class="similar-games">
         {% for similar in similar_games %}
-        <li><a href="/games/{{ similar.id }}">{{ similar.title }}</a></li>
+        <li><a href="/games/{{ similar.metacritic_slug }}">{{ similar.title }}</a></li>
         {% endfor %}
       </ul>
     </section>

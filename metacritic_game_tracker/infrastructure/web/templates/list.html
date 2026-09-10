@@ -37,7 +37,7 @@
     <ul class="game-list">
       {% for game in games %}
       <li>
-        <a class="cover" href="/games/{{ game.id }}">
+        <a class="cover" href="/games/{{ game.metacritic_slug }}">
           {% if game.cover_image_url %}
           <img src="{{ game.cover_image_url }}" alt="{{ game.title }}"
                onerror="this.hidden=true; this.nextElementSibling.hidden=false;">
@@ -50,7 +50,7 @@
           </div>
           {% endif %}
         </a>
-        <a class="title" href="/games/{{ game.id }}">{{ game.title }}</a>
+        <a class="title" href="/games/{{ game.metacritic_slug }}">{{ game.title }}</a>
         <div class="overall-scores">
           {% set cr_scores = game.platform_scores | map(attribute='metascore') | reject('none') | list %}
           {% set overall_cr = cr_scores | max if cr_scores else none %}
