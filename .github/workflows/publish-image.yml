@@ -171,6 +171,41 @@ jobs:
           APP_HOST_PORT: ${{ env.APP_HOST_PORT }}
           DB_HOST_PORT: ${{ env.DB_HOST_PORT }}
 
+      - name: Render .env for VPS
+        if: steps.check.outputs.configured == 'true'
+        id: render_env
+        run: |
+          # Same env-var-pipe pattern as docker-compose.yml above, for the
+          # same reason: no scp, no intermediate file on the VPS to land
+          # wrong. This step existed before, got dropped along with the
+          # nginx scp step, and nothing replaced it — MONITORING_USERNAME/
+          # PASSWORD (and everything else here) stopped reaching the VPS
+          # entirely, silently, since docker compose just keeps whatever
+          # .env was already there rather than erroring on a missing one.
+          cat > /tmp/deploy.env <<'ENVEOF'
+          POSTGRES_DB=${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
+          POSTGRES_USER=${{ secrets.POSTGRES_USER || 'postgres' }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_URL=postgresql+asyncpg://${{ secrets.POSTGRES_USER || 'postgres' }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
+          OPENCODE_BASE_URL=${{ secrets.OPENCODE_BASE_URL }}
+          OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }}
+          YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
+          MONITORING_USERNAME=${{ secrets.MONITORING_USERNAME }}
+          MONITORING_PASSWORD=${{ secrets.MONITORING_PASSWORD }}
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO=${{ secrets.ALERT_EMAIL_TO }}
+          APP_ENV=prod
+          LOGS_DIR=logs
+          APP_PORT=8080
+          ENVEOF
+          {
+            echo 'content_b64<<ENV_EOF'
+            base64 -w0 /tmp/deploy.env
+            echo
+            echo 'ENV_EOF'
+          } >> "$GITHUB_OUTPUT"
+          rm -f /tmp/deploy.env
+
       - name: Deploy on VPS
         if: steps.check.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.0
@@ -178,35 +213,37 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           RENDERED_COMPOSE_B64: ${{ steps.render.outputs.content_b64 }}
+          RENDERED_ENV_B64: ${{ steps.render_env.outputs.content_b64 }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ vars.VPS_PORT || '22' }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64
+          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64,RENDERED_ENV_B64
           script: |
             set -e
             APP_DIR="${VPS_APP_DIR:-~/metacritic-game-tracker}"
             mkdir -p "$APP_DIR/logs"
             chmod 777 "$APP_DIR/logs"
 
-            # .env из CI заменяет старый, только если был передан
-            if [ -f "$APP_DIR/.env" ] && [ -s "$APP_DIR/.env" ]; then
-              chmod 600 "$APP_DIR/.env"
-            fi
-
-
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
             cd "$APP_DIR"
 
-            # Written directly from the env var, not scp'd + moved — see the
+            # Written directly from env vars, not scp'd + moved — see the
             # render step's comment for why.
             if [ -z "$RENDERED_COMPOSE_B64" ]; then
               echo "ERROR: RENDERED_COMPOSE_B64 was empty!" >&2
               exit 1
             fi
             echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
+
+            if [ -z "$RENDERED_ENV_B64" ]; then
+              echo "ERROR: RENDERED_ENV_B64 was empty!" >&2
+              exit 1
+            fi
+            echo "$RENDERED_ENV_B64" | base64 -d > .env
+            chmod 600 .env
             rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
