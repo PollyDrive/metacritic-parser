@@ -286,14 +286,20 @@ jobs:
             docker compose -f docker-compose.yml exec -T app \
               python scripts/migrate.py
 
-            # NOW safe to delete — every `docker compose` invocation this
-            # run is done. Earlier attempt deleted .env right after `up -d`
-            # and broke everything after it: `docker compose` (exec, pull,
-            # ps — any subcommand) re-reads docker-compose.yml on every
-            # invocation and needs the env_file it references to actually
-            # exist on disk, even just to exec into an already-running
-            # container — it's not only consulted at container-create time.
-            rm -f .env
+            # Truncate, don't delete: docker-compose.yml's env_file: .env
+            # must still exist on disk for ANY future `docker compose`
+            # invocation (exec, ps, logs — not just create/up) to even load
+            # the config, regardless of whether that command needs the
+            # values — an already-running container already has them baked
+            # into its own process env from creation time, it doesn't
+            # re-read this file. Deleting the file outright (tried first)
+            # made every subsequent `docker compose exec` on this deploy
+            # fail immediately with "env file .env not found", and would
+            # have broken manual debugging (`docker compose exec app ...`)
+            # indefinitely until the next deploy recreated it. An empty
+            # file satisfies the existence check without any real secret
+            # sitting on disk between deploys.
+            : > .env
 
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             docker image prune -f
