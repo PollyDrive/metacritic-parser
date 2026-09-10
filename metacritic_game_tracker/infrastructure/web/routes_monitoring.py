@@ -313,6 +313,12 @@ async def monitoring_stream(
                 r.stage: (r.id, r.status, r.stage, (r.meta or {}).get("current_item"))
                 for r in result.scalars().all()
             }
+            # Read-only, but without this the transaction started by the
+            # execute() above stays open ("idle in transaction") for as long
+            # as the browser tab is connected — every open /monitoring tab
+            # then holds a lock that blocks any DDL on pipeline_runs
+            # indefinitely, and queues behind the live pipeline's own writes.
+            await session.rollback()
             lines, last_seen = _stage_events(latest_by_stage, last_seen)
             for line in lines:
                 yield line
@@ -378,3 +384,26 @@ async def trigger_run(
     await session.commit()
     await session.refresh(request_row)
     return JSONResponse(status_code=202, content={"id": request_row.id, "kind": kind})
+
+
+@router.post("/monitoring/runs/{run_id}/stop")
+async def stop_run(
+    run_id: int,
+    session: AsyncSession = Depends(get_monitoring_session),
+    operator: str = Depends(require_operator),
+):
+    """Force-stop: flips a cooperative flag the running use case checks
+    between items (infrastructure/db/repositories.py's is_cancel_requested)
+    — the web tier never touches the run in-flight itself (research.md §3),
+    same "enqueue only" boundary as POST /monitoring/run."""
+    run_row = await session.get(PipelineRunORM, run_id)
+    if run_row is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run_row.status != "running":
+        raise HTTPException(
+            status_code=409, detail=f"Run is not running (status={run_row.status})"
+        )
+
+    run_row.cancel_requested = True
+    await session.commit()
+    return JSONResponse(status_code=202, content={"id": run_row.id, "status": "cancel_requested"})

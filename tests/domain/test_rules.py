@@ -5,13 +5,10 @@ from decimal import Decimal
 
 from metacritic_game_tracker.domain.rules import (
     IngestState,
-    NewReleasesSource,
-    SeeAllSource,
     advance_state,
     calculate_llm_cost,
     calculate_next_refresh,
     day_key,
-    plan_ingest,
     roll_over_if_new_day,
 )
 
@@ -24,115 +21,31 @@ def test_day_key_resolves_calendar_day_in_configured_timezone():
 
 
 def test_roll_over_if_new_day_resets_state_when_day_changes():
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=15,
-        day_new_releases_done=True,
-        see_all_next_page=4,
-    )
+    state = IngestState(current_day=date(2026, 1, 1), day_processed_count=15, see_all_next_page=4)
     rolled = roll_over_if_new_day(state, date(2026, 1, 2))
-    assert rolled == IngestState(
-        current_day=date(2026, 1, 2),
-        day_processed_count=0,
-        day_new_releases_done=False,
-        see_all_next_page=1,
-    )
+    assert rolled == IngestState(current_day=date(2026, 1, 2), day_processed_count=0, see_all_next_page=1)
 
 
 def test_roll_over_if_new_day_is_noop_within_same_day():
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=15,
-        day_new_releases_done=True,
-        see_all_next_page=4,
-    )
+    state = IngestState(current_day=date(2026, 1, 1), day_processed_count=15, see_all_next_page=4)
     assert roll_over_if_new_day(state, date(2026, 1, 1)) is state
 
 
-def test_plan_ingest_uses_new_releases_first_with_a_topup_ready():
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=0,
-        day_new_releases_done=False,
-        see_all_next_page=1,
-    )
-    plan = plan_ingest(state)
-    assert plan.primary == NewReleasesSource()
-    assert plan.topup == SeeAllSource(page=1)
-
-
-def test_plan_ingest_uses_see_all_at_stored_cursor_once_new_releases_done():
-    """Real bug: the cursor only moves forward and never revisits page 1, but
-    the listing itself drifts (new games are added to page 1 throughout the
-    day) — without an always-on page-1 topup on every subsequent run, games
-    published after the day's first run were permanently missed once the
-    cursor had advanced past page 1."""
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=20,
-        day_new_releases_done=True,
-        see_all_next_page=3,
-    )
-    plan = plan_ingest(state)
-    assert plan.primary == SeeAllSource(page=3)
-    assert plan.topup == SeeAllSource(page=1)
-
-
-def test_advance_state_marks_new_releases_done_and_leaves_cursor_when_no_topup_needed():
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=0,
-        day_new_releases_done=False,
-        see_all_next_page=1,
-    )
-    plan = plan_ingest(state)
-    new_state = advance_state(state, plan, primary_count=20, topup_used=False, topup_count=0)
-    assert new_state.day_new_releases_done is True
-    assert new_state.see_all_next_page == 1
+def test_advance_state_leaves_cursor_untouched_when_new_releases_covered_the_run():
+    """FR-002/003: New Releases had candidates this run -> See All wasn't touched,
+    so its cursor must not move."""
+    state = IngestState(current_day=date(2026, 1, 1), day_processed_count=0, see_all_next_page=3)
+    new_state = advance_state(state, used_fallback=False, processed_count=20)
+    assert new_state.see_all_next_page == 3
     assert new_state.day_processed_count == 20
 
 
-def test_advance_state_tops_up_from_see_all_and_advances_cursor_by_one_page():
-    """FR-005: New Releases short -> top up from See All within same run."""
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=0,
-        day_new_releases_done=False,
-        see_all_next_page=1,
-    )
-    plan = plan_ingest(state)
-    new_state = advance_state(state, plan, primary_count=12, topup_used=True, topup_count=8)
-    assert new_state.day_new_releases_done is True
-    assert new_state.see_all_next_page == 2
-    assert new_state.day_processed_count == 20
-
-
-def test_advance_state_advances_cursor_on_subsequent_see_all_runs():
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=20,
-        day_new_releases_done=True,
-        see_all_next_page=3,
-    )
-    plan = plan_ingest(state)
-    new_state = advance_state(state, plan, primary_count=20, topup_used=False, topup_count=0)
+def test_advance_state_advances_cursor_by_one_page_when_fallback_was_used():
+    """FR-003: a run that fell back to See All (New Releases had nothing new)
+    moves that source's forward-only cursor to the next page."""
+    state = IngestState(current_day=date(2026, 1, 1), day_processed_count=20, see_all_next_page=3)
+    new_state = advance_state(state, used_fallback=True, processed_count=20)
     assert new_state.see_all_next_page == 4
-    assert new_state.day_processed_count == 40
-
-
-def test_advance_state_does_not_double_advance_when_the_always_on_topup_fires():
-    """Real bug regression: a later run's page-1 topup is a fixed recheck,
-    not a continuation of the long-tail cursor — using it must advance the
-    cursor exactly once (for the SeeAllSource primary), not twice."""
-    state = IngestState(
-        current_day=date(2026, 1, 1),
-        day_processed_count=20,
-        day_new_releases_done=True,
-        see_all_next_page=3,
-    )
-    plan = plan_ingest(state)
-    new_state = advance_state(state, plan, primary_count=18, topup_used=True, topup_count=2)
-    assert new_state.see_all_next_page == 4  # not 5
     assert new_state.day_processed_count == 40
 
 

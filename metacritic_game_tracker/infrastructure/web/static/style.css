@@ -406,6 +406,25 @@ ul.game-list .overall-scores {
   color: var(--text-dim);
 }
 
+.playthrough-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 0.2rem 0.5rem 0.2rem 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.playthrough-pill svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
 .platform {
   display: inline-block;
   font-size: 0.7rem;
@@ -702,6 +721,9 @@ ul.similar-games li {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   padding: 1rem 1.1rem;
+  min-height: 15.5rem;
+  display: flex;
+  flex-direction: column;
 }
 
 .pipeline-card-head {
@@ -745,6 +767,11 @@ ul.similar-games li {
   border-color: var(--accent);
 }
 
+.pipeline-badge.status-cancelled {
+  color: var(--text-dim);
+  border-color: var(--text-dim);
+}
+
 .pipeline-meta {
   color: var(--text-dim);
   font-size: 0.8rem;
@@ -779,15 +806,32 @@ ul.similar-games li {
   border-color: var(--danger);
 }
 
-.pipeline-card .run-btn {
+.pipeline-actions {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.pipeline-card .run-btn,
+.pipeline-card .stop-btn {
   width: 100%;
   padding: 0.5rem;
   font-size: 0.85rem;
 }
 
+.pipeline-card .stop-btn {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
 .pipeline-card .run-status {
-  margin-top: 0.5rem;
-  font-size: 0.8rem;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--danger);
+  line-height: 1.4;
 }
 
 .table-scroll {

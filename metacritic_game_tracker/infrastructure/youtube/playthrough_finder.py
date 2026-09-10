@@ -1,6 +1,8 @@
-"""Pick the most popular playthrough candidate for a game title — the
-highest view_count among the search results (FR-018: "its most popular ...
-playthrough video").
+"""Rank playthrough candidates for a game title, best first (FR-018: "its most
+popular ... playthrough video") — the caller tries them in order and uses the
+first one whose transcript actually fetches, since a captioned=true video can
+still fail (stale/wrong metadata, region lock, subtitles disabled after the
+fact) and transcript fetching costs no YouTube Data API quota.
 
 `search_videos` is injected so this stays unit-testable without a real YouTube
 Data API call — mirrors the fetch-injection pattern in application/ingest.py.
@@ -13,6 +15,11 @@ from dataclasses import dataclass
 
 SEARCH_COST_UNITS = 100
 
+# We constrain playthroughs to between 3 and 20 minutes to avoid wasting
+# transcript tokens on hour-long videos or short trailers.
+MIN_DURATION_SECONDS = 180
+MAX_DURATION_SECONDS = 1200
+
 
 @dataclass(frozen=True)
 class VideoCandidate:
@@ -20,15 +27,25 @@ class VideoCandidate:
     title: str
     view_count: int
     has_captions: bool
+    duration_seconds: int
+    description: str
 
 
 SearchVideos = Callable[[str], Awaitable[list[VideoCandidate]]]
 
 
-async def find_most_relevant_playthrough(
+def rank_playthrough_candidates(candidates: list[VideoCandidate]) -> list[VideoCandidate]:
+    """Best-first order: within the duration cap, captioned videos only,
+    most-viewed first. We rely on the Data API filtering for captions, but
+    this double-checks and strictly drops any uncaptioned results to prevent
+    wasting fetch attempts."""
+    eligible = [c for c in candidates if MIN_DURATION_SECONDS <= c.duration_seconds <= MAX_DURATION_SECONDS]
+    captioned = sorted((c for c in eligible if c.has_captions), key=lambda c: c.view_count, reverse=True)
+    return captioned
+
+
+async def find_playthrough_candidates(
     game_title: str, search_videos: SearchVideos
-) -> VideoCandidate | None:
-    candidates = await search_videos(f"{game_title} playthrough")
-    if not candidates:
-        return None
-    return max(candidates, key=lambda c: c.view_count)
+) -> list[VideoCandidate]:
+    candidates = await search_videos(f"{game_title} review")
+    return rank_playthrough_candidates(candidates)

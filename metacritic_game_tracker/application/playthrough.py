@@ -18,7 +18,7 @@ from metacritic_game_tracker.infrastructure.db.models import (
 )
 from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import (
     SEARCH_COST_UNITS,
-    find_most_relevant_playthrough,
+    find_playthrough_candidates,
 )
 from metacritic_game_tracker.shared.guardrail import sanitize_input, truncate_to_limit
 from metacritic_game_tracker.shared.llm_config import REASONING_ROUTE
@@ -26,7 +26,7 @@ from metacritic_game_tracker.shared.llm_config import REASONING_ROUTE
 
 def _build_prompt(transcript: str) -> str:
     return (
-        "Below is a transcript of a YouTube playthrough of a video game. In 2-4 "
+        "Below is a transcript of a YouTube review of a video game. In 2-4 "
         "sentences, summarize the key takeaway a viewer would get from watching it, "
         "based only on this transcript. Do NOT include any Markdown headers (like # Title).\n\n" + transcript
     )
@@ -53,8 +53,8 @@ class FindPlaythroughTakeawayUseCase:
             # the whole run here instead of looping through the rest.
             raise RunBudgetExhausted("Daily YouTube search quota exhausted")
 
-        candidate = await find_most_relevant_playthrough(game.title, self._search_videos)
-        if candidate is None:
+        ranked_candidates = await find_playthrough_candidates(game.title, self._search_videos)
+        if not ranked_candidates:
             self._session.add(
                 PipelineRejectORM(
                     stage="playthrough",
@@ -67,19 +67,39 @@ class FindPlaythroughTakeawayUseCase:
             )
             return False
 
-        transcript = await self._get_transcript(candidate.video_id)
-        if not transcript:
+        # A captioned=true candidate can still have no fetchable transcript
+        # (stale/wrong metadata, region lock, subtitles disabled after the
+        # fact) — try every ranked candidate rather than giving up on the
+        # first miss; the fetch itself spends no YouTube Data API quota.
+        candidate = None
+        transcript = None
+        for attempt in ranked_candidates:
+            transcript = await self._get_transcript(attempt.video_id)
+            if transcript:
+                candidate = attempt
+                break
+
+            # Cooldown to avoid tripping YouTube's anti-scraping rate limits
+            # when falling back through multiple candidates.
+            import asyncio
+            await asyncio.sleep(2)
+
+        if candidate is None:
             self._session.add(
                 PipelineRejectORM(
                     stage="playthrough",
                     run_id=run_id,
                     item_ref=str(game.id),
                     reason_code="no_transcript",
-                    reason_detail=f"No captions/transcript for video {candidate.video_id}",
+                    reason_detail=(
+                        f"No captions/transcript found among {len(ranked_candidates)} "
+                        f"candidate(s), best: {ranked_candidates[0].video_id}"
+                    ),
                     created_at=datetime.now(UTC),
                 )
             )
             return False
+
         prompt = _build_prompt(truncate_to_limit(sanitize_input(transcript)))
         try:
             text, input_tokens, output_tokens, model = await self._llm_call(REASONING_ROUTE, prompt)

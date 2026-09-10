@@ -24,6 +24,7 @@ from metacritic_game_tracker.infrastructure.db.models import (
     PlaythroughTakeawayORM,
     ReviewSummaryORM,
 )
+from metacritic_game_tracker.infrastructure.db.repositories import is_cancel_requested
 
 Step = Literal["critic_summary", "user_summary", "playthrough", "detail_fields"]
 
@@ -66,7 +67,7 @@ class BackfillEnrichmentUseCase:
         try:
             result = await do_work(game)
             produced = True if result is None else bool(result)
-            
+
             if not produced:
                 # The step explicitly skipped (e.g. no transcript available).
                 # Abandon it so we don't endlessly retry the exact same failure on the next run.
@@ -138,14 +139,16 @@ class BackfillEnrichmentUseCase:
                 )
             )
         elif step == "playthrough":
-            # research.md §6: the YouTube search budget is limited, so higher-Metascore
-            # (then more recent) games are searched for a playthrough first.
+            # Same priority as ingest's New Releases source (FR-002/003):
+            # newest games first, so a playthrough gets searched for a game
+            # while it's still current — metascore only breaks ties among
+            # games seen the same day, it no longer outranks recency.
             stmt = (
                 select(GameORM)
                 .outerjoin(PlaythroughTakeawayORM)
                 .outerjoin(PlatformScoreORM)
                 .where(PlaythroughTakeawayORM.id.is_(None))
-                .order_by(PlatformScoreORM.metascore.desc().nulls_last(), GameORM.first_seen_at.desc())
+                .order_by(GameORM.first_seen_at.desc(), PlatformScoreORM.metascore.desc().nulls_last())
             )
         else:
             audience = _STEP_AUDIENCE[step]
@@ -202,12 +205,26 @@ class BackfillEnrichmentUseCase:
             if stopped_early:
                 break
             for game, attempt in await self._games_missing(step, limit=games_per_run):
-                items_in += 1
                 # Committed per item (not only in the batch's final commit) so a
                 # concurrent viewer — the monitoring page's SSE poll — can show
                 # which game a manual run is currently processing.
                 run_row.meta = {"current_item": game.title}
                 await self._session.commit()
+
+                if await is_cancel_requested(self._session, run_row.id):
+                    # Force-stop (operator clicks Stop on /monitoring), seen at
+                    # the next per-item checkpoint. items_in intentionally
+                    # excludes this not-yet-attempted game.
+                    run_row.status = "cancelled"
+                    run_row.finished_at = datetime.now(UTC)
+                    run_row.error_message = "Cancelled by operator"
+                    run_row.items_in = items_in
+                    run_row.items_accepted = items_accepted
+                    run_row.items_deferred = items_deferred
+                    run_row.items_rejected = items_rejected
+                    return run_row
+
+                items_in += 1
                 try:
                     outcome = await self.process_game_step(
                         game, step, attempt, do_work=lambda g, s=step, rid=run_row.id: do_work_for_step(s, g, rid)

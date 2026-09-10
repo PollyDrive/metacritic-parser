@@ -95,9 +95,9 @@ async def test_failure_below_the_ceiling_schedules_a_backoff_retry():
     assert outcome.attempt.next_retry_at > datetime.now(UTC)
 
 
-async def test_games_missing_for_playthrough_orders_by_best_metascore_then_recency(mock_session):
-    """research.md §6: budget is limited, so higher-Metascore (then more recent)
-    games are searched for a playthrough first."""
+async def test_games_missing_for_playthrough_orders_newest_first_then_by_metascore(mock_session):
+    """Same priority as ingest's New Releases source (FR-002/003): newest
+    games are searched for a playthrough first, metascore only breaks ties."""
     result = MagicMock()
     result.scalars.return_value.unique.return_value.all.return_value = []
     mock_session.execute.return_value = result
@@ -107,9 +107,9 @@ async def test_games_missing_for_playthrough_orders_by_best_metascore_then_recen
 
     stmt = mock_session.execute.call_args_list[0].args[0]
     compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "order by" in compiled
-    assert "metascore" in compiled
-    assert "first_seen_at" in compiled
+    order_by_clause = compiled.split("order by", 1)[1]
+    assert "first_seen_at" in order_by_clause
+    assert order_by_clause.index("first_seen_at") < order_by_clause.index("metascore")
 
 
 async def test_games_missing_for_detail_fields_targets_missing_recoverable_columns(mock_session):
@@ -224,6 +224,31 @@ async def test_run_counts_items_in_and_items_accepted(mock_session):
 
     assert run_row.items_in == 2
     assert run_row.items_accepted == 1
+
+
+async def test_run_stops_and_marks_the_run_cancelled_when_a_stop_is_requested_mid_run(mock_session, monkeypatch):
+    """Force-stop (operator clicks Stop on /monitoring): checked between
+    items, so a request seen before game2 halts the run there — game2 is
+    never processed, and the run is marked 'cancelled', not 'completed'."""
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+    game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
+    game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
+
+    async def fake_games_missing(step, limit=None):
+        return [(game1, None), (game2, None)]
+
+    use_case._games_missing = fake_games_missing
+
+    cancel_checks = AsyncMock(side_effect=[False, True])
+    monkeypatch.setattr("metacritic_game_tracker.application.backfill.is_cancel_requested", cancel_checks)
+
+    do_work = AsyncMock()
+
+    run_row = await use_case.run(do_work, stage="review_refresh", steps=("critic_summary",))
+
+    assert run_row.status == "cancelled"
+    assert run_row.items_in == 1
+    do_work.assert_awaited_once()
 
 
 async def test_run_does_not_count_a_no_op_result_as_accepted(mock_session):

@@ -109,6 +109,24 @@ def test_find_title_userscore_returns_none_when_no_self_reference_exists():
     assert userscore is None
 
 
+def test_find_title_userscore_treats_a_literal_zero_score_as_tbd_not_a_real_rating():
+    """Caught live: every brand-new game with zero user ratings so far came
+    back with `userScore: {"score": 0}` — not a missing key, not null — and
+    was stored as a real 0.0 rating, shown on /games as 'UR 0.0' instead of
+    'UR tbd'. Metacritic itself never surfaces an exact 0.0 average (its own
+    UI shows 'tbd' until enough ratings exist); treat literal 0 the same as
+    absent."""
+    array = [
+        1300501979,
+        {"id": 0, "userScore": 2},
+        {"score": 0.0},
+    ]
+
+    userscore = _find_title_userscore(array, metacritic_id=1300501979)
+
+    assert userscore is None
+
+
 def test_build_parsed_game_handles_a_missing_video_link():
     """Edge case (T071): no video on the page — no crash, video_url is None."""
     game = {"id": 1, "slug": "some-game", "title": "Some Game", "platforms": []}

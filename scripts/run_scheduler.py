@@ -251,6 +251,12 @@ async def _mark_stuck_runs_failed() -> None:
 
 async def main() -> None:
     log.info("Worker starting")
+    # A container restart (deploy, OOM-kill, `podman restart`) kills the
+    # process outright — no exception ever reaches the loop's own `except`
+    # branch below, so a row left at "running" by the previous process
+    # would otherwise stay stuck forever, permanently blocking
+    # POST /monitoring/run's overlap check (see _mark_stuck_runs_failed).
+    await _mark_stuck_runs_failed()
     async with httpx.AsyncClient() as http_client:
         while True:
             async with session_scope() as session:
