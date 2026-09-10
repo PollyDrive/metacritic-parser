@@ -113,7 +113,7 @@ jobs:
         id: render
         run: |
           mkdir -p .deploy-rendered
-          python3 - <<PY
+          python3 - <<'PY'
           import os, re
           from pathlib import Path
 
@@ -144,20 +144,17 @@ jobs:
           print(f"Rendered: image={image}, app={app_port}, db={db_port}")
           PY
 
-          echo "--- .deploy-rendered/docker-compose.yml app: image line ---"
+          echo "Rendered app: image line:"
           grep -A1 '^  app:' .deploy-rendered/docker-compose.yml | grep 'image:'
-          echo "--- md5 ---"
-          md5sum .deploy-rendered/docker-compose.yml
 
-          # Passed to the SSH step as an env var, not scp'd — scp+mv for this
-          # one file kept landing the OLD unrendered docker-compose.yml on
-          # the VPS across several fix attempts (strip_components tuning,
-          # separate scp calls, VPS_APP_DIR alignment — none of it changed
-          # the outcome, so the bug wasn't in any of those), even though
-          # this very step's own log always showed the correct substitution
-          # happening right here. Piping the content through directly, with
-          # no copy/move step in between at all, removes every remaining
-          # unknown in that chain rather than guessing at another one.
+          # Passed to the SSH step as an env var rather than scp'd + moved on
+          # the VPS — fewer moving parts, and this was never actually where
+          # the bug was (root cause: the heredoc above used to be an
+          # unquoted `<<PY`, so bash expanded every `\$` in the Python
+          # source before python ever saw it, silently turning the `\$` in
+          # each regex into a bare `$` — a real content mismatch, not a
+          # transport one. Every scp/strip_components/mv fix attempt before
+          # this one was chasing the wrong layer).
           {
             echo 'content_b64<<COMPOSE_EOF'
             base64 -w0 .deploy-rendered/docker-compose.yml
@@ -204,12 +201,7 @@ jobs:
               echo "ERROR: RENDERED_COMPOSE_B64 was empty!" >&2
               exit 1
             fi
-            echo "RENDERED_COMPOSE_B64 length: ${#RENDERED_COMPOSE_B64}"
             echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
-            echo "--- docker-compose.yml app: image line right after write ---"
-            grep -A1 '^  app:' docker-compose.yml | grep 'image:'
-            echo "--- md5 ---"
-            md5sum docker-compose.yml
             rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
