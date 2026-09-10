@@ -142,29 +142,55 @@ jobs:
 
           Path(".deploy-rendered/docker-compose.yml").write_text(content)
           print(f"Rendered: image={image}, app={app_port}, db={db_port}")
+
+          # === ВОССТАНАВЛИВАЕМ ГЕНЕРАЦИЮ .env ===
+          env_keys = [
+              "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD",
+              "OPENCODE_BASE_URL", "OPENCODE_API_KEY", "YOUTUBE_API_KEY",
+              "MONITORING_USERNAME", "MONITORING_PASSWORD",
+              "APP_ENV", "LOGS_DIR", "RESEND_API_KEY", "ALERT_EMAIL_TO"
+          ]
+          env_lines = []
+          for k in env_keys:
+              val = os.getenv(k, "")
+              if val:
+                  # Экранирование $ не требуется, так как мы пишем напрямую в файл,
+                  # а Docker Compose воспринимает значения "как есть" (кроме интерполяции,
+                  # но пароль без $, поэтому безопасно). Если нужны $$, пользователь введет их в GH Secrets.
+                  env_lines.append(f"{k}={val}")
+          
+          Path(".deploy-rendered/.env").write_text("\n".join(env_lines))
           PY
 
           echo "Rendered app: image line:"
           grep -A1 '^  app:' .deploy-rendered/docker-compose.yml | grep 'image:'
 
-          # Passed to the SSH step as an env var rather than scp'd + moved on
-          # the VPS — fewer moving parts, and this was never actually where
-          # the bug was (root cause: the heredoc above used to be an
-          # unquoted `<<PY`, so bash expanded every `\$` in the Python
-          # source before python ever saw it, silently turning the `\$` in
-          # each regex into a bare `$` — a real content mismatch, not a
-          # transport one. Every scp/strip_components/mv fix attempt before
-          # this one was chasing the wrong layer).
           {
             echo 'content_b64<<COMPOSE_EOF'
             base64 -w0 .deploy-rendered/docker-compose.yml
             echo
             echo 'COMPOSE_EOF'
+            echo 'env_b64<<ENV_EOF'
+            base64 -w0 .deploy-rendered/.env
+            echo
+            echo 'ENV_EOF'
           } >> "$GITHUB_OUTPUT"
         env:
           APP_IMAGE: ${{ env.APP_IMAGE }}
           APP_HOST_PORT: ${{ env.APP_HOST_PORT }}
           DB_HOST_PORT: ${{ env.DB_HOST_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          OPENCODE_BASE_URL: ${{ secrets.OPENCODE_BASE_URL }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          MONITORING_USERNAME: ${{ secrets.MONITORING_USERNAME }}
+          MONITORING_PASSWORD: ${{ secrets.MONITORING_PASSWORD }}
+          APP_ENV: ${{ secrets.APP_ENV }}
+          LOGS_DIR: ${{ secrets.LOGS_DIR }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
 
       - name: Deploy on VPS
         if: steps.check.outputs.configured == 'true'
@@ -173,12 +199,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           RENDERED_COMPOSE_B64: ${{ steps.render.outputs.content_b64 }}
+          RENDERED_ENV_B64: ${{ steps.render.outputs.env_b64 }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ vars.VPS_PORT || '22' }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64
+          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64,RENDERED_ENV_B64
           script: |
             set -e
             APP_DIR="${VPS_APP_DIR:-~/metacritic-game-tracker}"
@@ -202,6 +229,12 @@ jobs:
               exit 1
             fi
             echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
+
+            if [ -n "$RENDERED_ENV_B64" ]; then
+              echo "$RENDERED_ENV_B64" | base64 -d > .env
+              chmod 600 .env
+            fi
+
             rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
