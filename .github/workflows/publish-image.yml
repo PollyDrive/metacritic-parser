@@ -110,6 +110,7 @@ jobs:
 
       - name: Render docker-compose for VPS
         if: steps.check.outputs.configured == 'true'
+        id: render
         run: |
           mkdir -p .deploy-rendered
           python3 - <<PY
@@ -142,32 +143,25 @@ jobs:
           Path(".deploy-rendered/docker-compose.yml").write_text(content)
           print(f"Rendered: image={image}, app={app_port}, db={db_port}")
           PY
+          # Passed to the SSH step as an env var, not scp'd — scp+mv for this
+          # one file kept landing the OLD unrendered docker-compose.yml on
+          # the VPS across several fix attempts (strip_components tuning,
+          # separate scp calls, VPS_APP_DIR alignment — none of it changed
+          # the outcome, so the bug wasn't in any of those), even though
+          # this very step's own log always showed the correct substitution
+          # happening right here. Piping the content through directly, with
+          # no copy/move step in between at all, removes every remaining
+          # unknown in that chain rather than guessing at another one.
+          {
+            echo 'content_b64<<COMPOSE_EOF'
+            base64 -w0 .deploy-rendered/docker-compose.yml
+            echo
+            echo 'COMPOSE_EOF'
+          } >> "$GITHUB_OUTPUT"
         env:
           APP_IMAGE: ${{ env.APP_IMAGE }}
           APP_HOST_PORT: ${{ env.APP_HOST_PORT }}
           DB_HOST_PORT: ${{ env.DB_HOST_PORT }}
-
-      - name: Copy deploy files to VPS
-        if: steps.check.outputs.configured == 'true'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          port: ${{ vars.VPS_PORT || '22' }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          # Only these two — both under .deploy-rendered/, same path depth,
-          # so strip_components:1 is unambiguous. scripts/ used to ride
-          # along here too (1 path component vs these two's 2), which is
-          # exactly the kind of heterogeneous-depth multi-source scp that
-          # broke silently: docker-compose.yml on the VPS stayed the old
-          # unrendered file (image: metacritic-game-tracker-app, the bare
-          # fallback with no registry) even though the render step upstream
-          # computed the right ghcr.io image every time — nothing here ever
-          # consumes scripts/ from the host anyway: migrate.py runs via
-          # `docker compose exec app python scripts/migrate.py`, out of the
-          # image's own copy, not this checkout's.
-          source: ".deploy-rendered/docker-compose.yml"
-          target: ${{ env.VPS_APP_DIR }}
 
       - name: Deploy on VPS
         if: steps.check.outputs.configured == 'true'
@@ -175,12 +169,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
+          RENDERED_COMPOSE_B64: ${{ steps.render.outputs.content_b64 }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ vars.VPS_PORT || '22' }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR
+          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64
           script: |
             set -e
             APP_DIR="${VPS_APP_DIR:-~/metacritic-game-tracker}"
@@ -196,14 +191,15 @@ jobs:
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
             cd "$APP_DIR"
-            
-            if [ -f ".deploy-rendered/docker-compose.yml" ]; then
-              mv .deploy-rendered/docker-compose.yml docker-compose.yml
-              rm -rf .deploy-rendered
-            else
-              echo "ERROR: .deploy-rendered/docker-compose.yml not found on VPS!"
+
+            # Written directly from the env var, not scp'd + moved — see the
+            # render step's comment for why.
+            if [ -z "$RENDERED_COMPOSE_B64" ]; then
+              echo "ERROR: RENDERED_COMPOSE_B64 was empty!" >&2
               exit 1
             fi
+            echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
+            rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
             # run_scheduler.py that used to land bare in this dir from the
