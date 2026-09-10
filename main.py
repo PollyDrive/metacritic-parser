@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 from pathlib import Path
 
@@ -23,7 +24,9 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOGS_DIR / "app.log"),
+        logging.handlers.RotatingFileHandler(
+            LOGS_DIR / "app.log", maxBytes=10 * 1024 * 1024, backupCount=5
+        ),
     ],
 )
 log = logging.getLogger(__name__)

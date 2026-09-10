@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,7 +50,12 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler(LOGS_DIR / "worker.log")],
+    handlers=[
+        logging.StreamHandler(),
+        logging.handlers.RotatingFileHandler(
+            LOGS_DIR / "worker.log", maxBytes=10 * 1024 * 1024, backupCount=5
+        ),
+    ],
 )
 # httpx logs the full request URL (including query string) at INFO — the
 # YouTube Data API key travels as a `?key=` query param, so at the app's own
