@@ -233,6 +233,17 @@ jobs:
 
             cd "$APP_DIR"
 
+            # Clean stray files from past deploys (e.g. migrate.py/
+            # run_scheduler.py that used to land bare in this dir from the
+            # old scripts/ scp source) — whitelist, not blacklist, so a
+            # future accidental extra source doesn't linger silently again.
+            # backup.sh is left alone: nothing in this pipeline creates it,
+            # so it's presumably placed here deliberately, not deploy debris.
+            find . -mindepth 1 -maxdepth 1 \
+              ! -name '.env' ! -name 'docker-compose.yml' \
+              ! -name 'logs' ! -name 'nginx' ! -name 'backup.sh' \
+              -exec rm -rf {} +
+
             echo "Deployed compose image line:"
             grep -A1 '^  app:' docker-compose.yml | grep image:
 
