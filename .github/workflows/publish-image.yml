@@ -273,14 +273,6 @@ jobs:
             docker compose -f docker-compose.yml exec -T app \
               python scripts/migrate.py
 
-            # nginx: кладём конфиг и перезагружаем
-            NGINX_CONF="$APP_DIR/nginx/metacritic-game-tracker.conf"
-            if [ -f "$NGINX_CONF" ]; then
-              sudo cp "$NGINX_CONF" /etc/nginx/sites-available/metacritic-game-tracker
-              sudo ln -sf /etc/nginx/sites-available/metacritic-game-tracker \
-                          /etc/nginx/sites-enabled/metacritic-game-tracker
-              sudo nginx -t && sudo nginx -s reload
-            fi
-
+            
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             docker image prune -f
