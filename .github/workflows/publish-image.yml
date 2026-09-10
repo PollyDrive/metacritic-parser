@@ -214,14 +214,28 @@ jobs:
             podman compose -f docker-compose.yml pull
             podman compose -f docker-compose.yml up -d --force-recreate
 
-            # Миграции: ждём старт db, затем запускаем idempotent migrate.py
-            sleep 10
+            # Ждём готовности DB: pg_isready в цикле (до 90 секунд).
+            # sleep 10 не хватает при первом запуске — postgres инициализирует
+            # data directory, это занимает 30–60 секунд.
+            DB_USER="${POSTGRES_USER:-postgres}"
+            DB_READY=0
+            for i in $(seq 1 45); do
+              if podman compose -f docker-compose.yml exec -T db \
+                   pg_isready -U "$DB_USER" -q 2>/dev/null; then
+                DB_READY=1
+                echo "DB ready after $((i * 2))s"
+                break
+              fi
+              sleep 2
+            done
+            if [ "$DB_READY" -ne 1 ]; then
+              echo "ERROR: DB did not become ready in 90s" >&2
+              exit 1
+            fi
+
+            # Миграции: idempotent, безопасно при повторных запусках
             podman compose -f docker-compose.yml exec -T app \
-              python scripts/migrate.py \
-              || podman run --rm --network=host \
-                   --env-file "$APP_DIR/.env" \
-                   "$(podman compose -f docker-compose.yml images -q app)" \
-                   python scripts/migrate.py
+              python scripts/migrate.py
 
             # nginx: кладём конфиг и перезагружаем
             NGINX_CONF="$APP_DIR/nginx/metacritic-game-tracker.conf"
