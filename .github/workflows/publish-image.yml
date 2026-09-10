@@ -168,7 +168,6 @@ jobs:
           # image's own copy, not this checkout's.
           source: ".deploy-rendered/docker-compose.yml"
           target: ${{ env.VPS_APP_DIR }}
-          strip_components: 1
 
       - name: Deploy on VPS
         if: steps.check.outputs.configured == 'true'
@@ -197,6 +196,14 @@ jobs:
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
             cd "$APP_DIR"
+            
+            if [ -f ".deploy-rendered/docker-compose.yml" ]; then
+              mv .deploy-rendered/docker-compose.yml docker-compose.yml
+              rm -rf .deploy-rendered
+            else
+              echo "ERROR: .deploy-rendered/docker-compose.yml not found on VPS!"
+              exit 1
+            fi
 
             # Clean stray files from past deploys (e.g. migrate.py/
             # run_scheduler.py that used to land bare in this dir from the
