@@ -223,6 +223,10 @@ jobs:
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d --force-recreate
 
+            echo "=== DEBUG: CONTAINER ENVIRONMENT ==="
+            docker compose -f docker-compose.yml exec -T app env | grep -E 'MONITORING|YOUTUBE|OPENCODE|POSTGRES' || true
+            echo "===================================="
+
             # Ждём готовности DB: pg_isready в цикле (до 90 секунд).
             # sleep 10 не хватает при первом запуске — postgres инициализирует
             # data directory, это занимает 30–60 секунд.
