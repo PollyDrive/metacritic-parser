@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - preprod
   workflow_dispatch:
 
 jobs:
@@ -82,7 +81,7 @@ jobs:
   deploy-vps:
     runs-on: ubuntu-latest
     needs: publish
-    if: github.ref_name == 'main' || github.ref_name == 'preprod'
+    if: github.ref_name == 'main'
     env:
       APP_IMAGE: ${{ vars.APP_IMAGE }}
       VPS_APP_DIR: ${{ vars.VPS_APP_DIR }}
@@ -137,6 +136,14 @@ jobs:
           for source, target in templates.items():
               content = Path(source).read_text()
               rendered = render(content)
+              # podman fix: remove volume mount
+              rendered = re.sub(r'^\s*-\s*\.:/app\s*$\n?', '', rendered, flags=re.MULTILINE)
+              # podman fix: remove build: .
+              rendered = re.sub(r'^\s*build:\s*\.\s*$\n?', '', rendered, flags=re.MULTILINE)
+              # nginx fix: bind to 127.0.0.1
+              rendered = rendered.replace('"- 8001:8000"', '"127.0.0.1:8001:8000"').replace('8001:8000', '127.0.0.1:8001:8000')
+              # APP_IMAGE fix: replace CI_REGISTRY_IMAGE with APP_IMAGE
+              rendered = rendered.replace('CI_REGISTRY_IMAGE', 'APP_IMAGE')
               Path(target).write_text(rendered)
           PY
 
@@ -162,12 +169,15 @@ jobs:
       - name: Pull and restart on VPS
         if: steps.check.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ vars.VPS_PORT || '22' }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: VPS_APP_DIR
+          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR
           script: |
             APP_DIR="${VPS_APP_DIR:-/home/krvtzz/projects/metacritic-game-tracker}"
             mkdir -p "$APP_DIR/logs"
@@ -187,6 +197,7 @@ jobs:
             PODMAN_PID=$!
             sleep 5
             
+            podman login ghcr.io -u "$GH_ACTOR" -p "$GH_TOKEN"
             podman compose pull
             podman compose up -d --force-recreate
             sleep 15
