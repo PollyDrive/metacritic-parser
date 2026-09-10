@@ -88,6 +88,13 @@
             </span>
           {% endfor %}
         </div>
+
+        {% if game.playthrough_takeaway %}
+        <span class="playthrough-pill">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Playthrough
+        </span>
+        {% endif %}
       </li>
       {% endfor %}
       </ul>

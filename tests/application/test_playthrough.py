@@ -72,11 +72,44 @@ async def test_raises_run_budget_exhausted_when_the_daily_budget_is_exhausted(mo
 
 
 async def test_records_a_pipeline_reject_when_no_captions_are_found(mock_session):
-    """yt-dlp fails to find a caption track for the chosen video — a normal,
-    expected outcome (not an exception), but still worth a reason in the
-    Errors Log rather than silent nothing."""
+    """Every candidate falls outside the ranking window (here: no candidate
+    at all is captioned) — a normal, expected outcome, but still worth a
+    reason in the Errors Log rather than silent nothing."""
     candidate = VideoCandidate(
-        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=False
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=False, duration_seconds=600, description="",
+    )
+
+    async def search_videos(query: str):
+        return [candidate]
+
+    llm_call = AsyncMock()
+
+    use_case = FindPlaythroughTakeawayUseCase(
+        session=mock_session,
+        budget=_budget(),
+        search_videos=search_videos,
+        get_transcript=AsyncMock(return_value=None),
+        llm_call=llm_call,
+    )
+
+    created = await use_case.run(_game())
+
+    assert created is False
+    rejects = _reject_rows(mock_session)
+    assert len(rejects) == 1
+    # Ranking drops the uncaptioned candidate before any fetch is attempted,
+    # so this is a "no eligible candidate" miss, not a fetch failure.
+    assert rejects[0].reason_code == "no_candidate_video"
+    llm_call.assert_not_awaited()
+
+
+async def test_records_a_no_transcript_reject_when_every_ranked_candidate_fails_to_fetch(mock_session):
+    """has_captions=true metadata can still be stale or wrong — the video
+    survives ranking but the actual fetch comes back empty."""
+    candidate = VideoCandidate(
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
     )
 
     async def search_videos(query: str):
@@ -101,9 +134,49 @@ async def test_records_a_pipeline_reject_when_no_captions_are_found(mock_session
     llm_call.assert_not_awaited()
 
 
+async def test_falls_back_to_the_next_ranked_candidate_when_the_top_one_has_no_transcript(mock_session):
+    """Real bug: has_captions=true metadata can be stale or wrong — a video
+    ranked first can still fail to fetch, and the whole game used to be
+    abandoned right there even though other candidates from the same search
+    were never tried. Transcript fetching costs no YouTube Data API quota,
+    so every ranked candidate should get a shot before giving up."""
+    first = VideoCandidate(
+        video_id="first", title="First result", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
+    )
+    second = VideoCandidate(
+        video_id="second", title="Second result", view_count=500,
+        has_captions=True, duration_seconds=600, description="",
+    )
+
+    async def search_videos(query: str):
+        return [first, second]
+
+    get_transcript = AsyncMock(side_effect=[None, "raw transcript text"])
+    llm_call = AsyncMock(return_value=("Great open world, tough bosses.", 500, 100, "claude-haiku-4-5"))
+
+    use_case = FindPlaythroughTakeawayUseCase(
+        session=mock_session,
+        budget=_budget(),
+        search_videos=search_videos,
+        get_transcript=get_transcript,
+        llm_call=llm_call,
+    )
+
+    created = await use_case.run(_game())
+
+    assert created is True
+    assert get_transcript.await_count == 2
+    takeaway = next(
+        c.args[0] for c in mock_session.add.call_args_list if type(c.args[0]).__name__ == "PlaythroughTakeawayORM"
+    )
+    assert "second" in takeaway.video_url
+
+
 async def test_persists_a_takeaway_and_an_llm_call_when_a_video_is_found(mock_session):
     candidate = VideoCandidate(
-        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=True
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
     )
 
     async def search_videos(query: str):
@@ -136,7 +209,8 @@ async def test_records_a_failed_llm_call_when_the_takeaway_call_raises(mock_sess
     statically here (REASONING_ROUTE), unlike enrichment.py's injected
     black-box summarize()."""
     candidate = VideoCandidate(
-        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=True
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
     )
 
     async def search_videos(query: str):
@@ -172,7 +246,8 @@ async def test_truncates_an_oversized_transcript_before_sending_it_to_the_llm(mo
     built here embeds the whole transcript. Regression: an unbounded prompt
     risks blowing past a model's context window and unpredictable cost."""
     candidate = VideoCandidate(
-        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=True
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
     )
     oversized_transcript = "word " * 10000  # 50000 chars, well above the 20000-char guardrail limit
 
@@ -198,7 +273,8 @@ async def test_truncates_an_oversized_transcript_before_sending_it_to_the_llm(mo
 
 async def test_records_cost_usd_on_the_successful_llm_call_via_the_injected_lookup(mock_session):
     candidate = VideoCandidate(
-        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=True
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
     )
 
     async def search_videos(query: str):

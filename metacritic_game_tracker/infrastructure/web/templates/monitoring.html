@@ -61,7 +61,13 @@
         {% if p.coverage %}
         <p class="pipeline-meta">Coverage: {{ p.coverage.covered }}/{{ p.coverage.total }} games have a playthrough</p>
         {% endif %}
-        <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
+        <div class="pipeline-actions">
+          <p class="run-status" data-kind="{{ p.kind }}" hidden></p>
+          <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
+          <button type="button" class="stop-btn" data-kind="{{ p.kind }}"
+                  data-run-id="{{ p.latest.id if p.latest else '' }}"
+                  {% if not (p.latest and p.latest.status == 'running') %}hidden{% endif %}>Stop</button>
+        </div>
       </div>
       {% endfor %}
     </div>
@@ -256,22 +262,65 @@
       el.className = "pipeline-badge status-" + (level || "idle");
     }
 
+    // Transient per-action feedback (e.g. "already running", a network
+    // error) goes under the buttons, not into the pipeline's own status
+    // badge above — that badge reflects the pipeline's actual lifecycle
+    // (driven by SSE), not a click that never started anything.
+    function showActionWarning(kind, text) {
+      const card = cardFor(kind);
+      if (!card) return;
+      const el = card.querySelector(".run-status");
+      if (!el) return;
+      el.textContent = text;
+      el.hidden = false;
+    }
+
+    function clearActionWarning(kind) {
+      const card = cardFor(kind);
+      if (!card) return;
+      const el = card.querySelector(".run-status");
+      if (el) el.hidden = true;
+    }
+
     document.querySelectorAll(".run-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const kind = btn.dataset.kind;
         btn.disabled = true;
-        showStatus(kind, "Queuing run…", "running");
+        clearActionWarning(kind);
         try {
           const res = await fetch("/monitoring/run?kind=" + encodeURIComponent(kind), { method: "POST" });
           if (res.status === 202) {
             showStatus(kind, "Queued — waiting...", "running");
           } else {
             const body = await res.json().catch(() => ({}));
-            showStatus(kind, body.detail || "Could not start a run.", "failed");
+            showActionWarning(kind, body.detail || "Could not start a run.");
             btn.disabled = false;
           }
         } catch (err) {
-          showStatus(kind, "Request failed", "failed");
+          showActionWarning(kind, "Request failed");
+          btn.disabled = false;
+        }
+      });
+    });
+
+    document.querySelectorAll(".stop-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const kind = btn.dataset.kind;
+        const runId = btn.dataset.runId;
+        if (!runId) return;
+        btn.disabled = true;
+        clearActionWarning(kind);
+        try {
+          const res = await fetch("/monitoring/runs/" + encodeURIComponent(runId) + "/stop", { method: "POST" });
+          if (res.status !== 202) {
+            const body = await res.json().catch(() => ({}));
+            showActionWarning(kind, body.detail || "Could not stop the run.");
+            btn.disabled = false;
+          }
+          // On success, leave it disabled — the SSE stream below hides it
+          // once the run actually lands on a terminal status.
+        } catch (err) {
+          showActionWarning(kind, "Request failed");
           btn.disabled = false;
         }
       });
@@ -280,16 +329,21 @@
     function handleStreamMessage(event) {
       const run = JSON.parse(event.data);
       const btn = document.querySelector('.run-btn[data-kind="' + run.stage + '"]');
+      const stopBtn = document.querySelector('.stop-btn[data-kind="' + run.stage + '"]');
       if (run.status === "running") {
         if (btn) btn.disabled = true;
+        if (stopBtn) {
+          stopBtn.hidden = false;
+          stopBtn.disabled = false;
+          stopBtn.dataset.runId = run.id;
+        }
+        clearActionWarning(run.stage);
         showStatus(run.stage, "Running…", "running");
-      } else if (run.status === "completed" || run.status === "failed") {
+      } else if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+        if (stopBtn) stopBtn.hidden = true;
         if (btn && btn.disabled) {
-          showStatus(
-            run.stage,
-            run.status === "completed" ? "Completed — refreshing…" : "Run failed — refreshing…",
-            run.status === "completed" ? "completed" : "failed"
-          );
+          const labels = {completed: "Completed", failed: "Run failed", cancelled: "Stopped"};
+          showStatus(run.stage, labels[run.status] + " — refreshing…", run.status);
           setTimeout(() => window.location.reload(), 800);
         }
       }

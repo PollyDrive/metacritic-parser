@@ -18,16 +18,38 @@ the takeaway is simply skipped for that game (backfill retries it later).
 from __future__ import annotations
 
 import asyncio
+import re
 
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import CouldNotRetrieveTranscript, NoTranscriptFound
+from youtube_transcript_api._errors import (
+    AgeRestricted,
+    InvalidVideoId,
+    NoTranscriptFound,
+    NotTranslatable,
+    TranscriptsDisabled,
+    TranslationLanguageNotAvailable,
+    VideoUnavailable,
+    VideoUnplayable,
+)
 
 from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import VideoCandidate
 
 _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 _MAX_RESULTS = 10
+
+# YouTube video durations never carry a years/months/days component (the API
+# caps a single upload's length well under a day) — just PT#H#M#S, any part optional.
+_ISO8601_DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+
+
+def _parse_duration_seconds(iso8601: str) -> int:
+    match = _ISO8601_DURATION_RE.fullmatch(iso8601)
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
 
 
 async def search_videos(
@@ -39,6 +61,8 @@ async def search_videos(
             "part": "snippet",
             "q": query,
             "type": "video",
+            "videoDuration": "medium",
+            "videoCaption": "closedCaption",
             "maxResults": _MAX_RESULTS,
             "key": api_key,
             "relevanceLanguage": "en",
@@ -69,6 +93,8 @@ async def search_videos(
             title=item["snippet"]["title"],
             view_count=int(item.get("statistics", {}).get("viewCount", 0)),
             has_captions=item.get("contentDetails", {}).get("caption") == "true",
+            duration_seconds=_parse_duration_seconds(item.get("contentDetails", {}).get("duration", "PT0S")),
+            description=item.get("snippet", {}).get("description", ""),
         )
         for item in videos_resp.json().get("items", [])
     ]
@@ -91,10 +117,30 @@ def _find_english_transcript(video_id: str):
         raise
 
 
+# Only these actually mean "this video has no obtainable transcript" — safe
+# to record as a normal no_transcript reject and abandon permanently (spec
+# US4 AC-2). `RequestBlocked`/`IpBlocked` and every other
+# `CouldNotRetrieveTranscript` subclass are access/infrastructure failures
+# (YouTube rate-limiting or blocking this server's own IP is common for this
+# library run from server infra) — those must propagate as real errors so
+# the caller's existing retry/backoff handles them, instead of permanently
+# abandoning a video that may well have real captions.
+_NO_TRANSCRIPT_EXCEPTIONS = (
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    VideoUnplayable,
+    AgeRestricted,
+    InvalidVideoId,
+    NotTranslatable,
+    TranslationLanguageNotAvailable,
+)
+
+
 def _fetch_transcript_sync(video_id: str) -> str | None:
     try:
         transcript = _find_english_transcript(video_id).fetch()
-    except CouldNotRetrieveTranscript:
+    except _NO_TRANSCRIPT_EXCEPTIONS:
         # A normal, expected outcome (spec US4 AC-2) — the caller records it as
         # a `no_transcript` pipeline_reject. It is NOT an operator alert:
         # emailing here inverted FR-030, paging on routine misses while a real

@@ -9,10 +9,21 @@ from metacritic_game_tracker.domain.rules import IngestState
 from metacritic_game_tracker.infrastructure.db.models import (
     GameORM,
     IngestStateORM,
+    PipelineRunORM,
     PlatformScoreORM,
     ReviewSummaryORM,
 )
 from metacritic_game_tracker.infrastructure.scraper.parser import ParsedGame
+
+
+async def is_cancel_requested(session: AsyncSession, run_id: int) -> bool:
+    """Cooperative force-stop check (operator clicks Stop on /monitoring) —
+    checked between items so a stop takes effect at the next safe checkpoint
+    instead of killing mid-write."""
+    result = await session.execute(
+        select(PipelineRunORM.cancel_requested).where(PipelineRunORM.id == run_id)
+    )
+    return bool(result.scalar_one_or_none())
 
 
 class GameRepository:
@@ -84,6 +95,17 @@ class GameRepository:
             select(GameORM).where(GameORM.metacritic_slug == slug)
         )
         return result.scalar_one_or_none()
+
+    async def filter_known_slugs(self, slugs: list[str]) -> set[str]:
+        """Cheap pre-fetch check for the ingest fallback decision (FR-002/003) —
+        which of these listing-page slugs are already in the catalog, without
+        touching any game's detail page."""
+        if not slugs:
+            return set()
+        result = await self._session.execute(
+            select(GameORM.metacritic_slug).where(GameORM.metacritic_slug.in_(slugs))
+        )
+        return set(result.scalars().all())
 
     async def has_review_summary(self, game_id: int, audience: str) -> bool:
         result = await self._session.execute(
@@ -177,7 +199,6 @@ class IngestStateRepository:
                 id=1,
                 current_day=datetime.now(UTC).date(),
                 day_processed_count=0,
-                day_new_releases_done=False,
                 see_all_next_page=1,
                 updated_at=datetime.now(UTC),
             )
@@ -188,6 +209,5 @@ class IngestStateRepository:
         row = await self.get()
         row.current_day = new_state.current_day
         row.day_processed_count = new_state.day_processed_count
-        row.day_new_releases_done = new_state.day_new_releases_done
         row.see_all_next_page = new_state.see_all_next_page
         row.updated_at = datetime.now(UTC)

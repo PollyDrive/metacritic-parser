@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from metacritic_game_tracker.domain.rules import (
     IngestState,
     NewReleasesSource,
+    SeeAllSource,
     advance_state,
     day_key,
-    plan_ingest,
     roll_over_if_new_day,
 )
 from metacritic_game_tracker.infrastructure.alerting.email import send_alert_email
@@ -32,6 +32,7 @@ from metacritic_game_tracker.infrastructure.db.models import PipelineRejectORM, 
 from metacritic_game_tracker.infrastructure.db.repositories import (
     GameRepository,
     IngestStateRepository,
+    is_cancel_requested,
 )
 from metacritic_game_tracker.infrastructure.dq import gates
 from metacritic_game_tracker.infrastructure.scraper import parser
@@ -83,18 +84,33 @@ class IngestGamesUseCase:
         domain_state = IngestState(
             current_day=state_orm.current_day,
             day_processed_count=state_orm.day_processed_count,
-            day_new_releases_done=state_orm.day_new_releases_done,
             see_all_next_page=state_orm.see_all_next_page,
         )
         today = day_key(datetime.now(UTC), "UTC")
         domain_state = roll_over_if_new_day(domain_state, today)
-        plan = plan_ingest(domain_state)
+
+        # FR-002/003: every run tries New Releases first; only when it has zero
+        # games not already in the catalog does this run fall back to See All
+        # at the stored forward-only cursor.
+        new_release_stubs = await self._fetch_listing(NewReleasesSource())
+        known_slugs = await self._game_repo.filter_known_slugs(
+            [s.metacritic_slug for s in new_release_stubs]
+        )
+        unseen_stubs = [s for s in new_release_stubs if s.metacritic_slug not in known_slugs]
+
+        used_fallback = len(unseen_stubs) == 0
+        if used_fallback:
+            source = SeeAllSource(page=domain_state.see_all_next_page)
+            stubs = await self._fetch_listing(source)
+        else:
+            source = NewReleasesSource()
+            stubs = new_release_stubs
 
         run_row = PipelineRunORM(
             stage="ingest",
             status="running",
             started_at=datetime.now(UTC),
-            source=_source_name(plan.primary),
+            source=_source_name(source),
         )
         self._session.add(run_row)
         # Committed immediately, separately from the batch's final commit, so a
@@ -102,33 +118,6 @@ class IngestGamesUseCase:
         # is still in flight rather than only ever seeing the terminal state.
         await self._session.commit()
 
-        stubs = await self._fetch_listing(plan.primary)
-        topup_used = False
-        topup_count_target = 0
-        if plan.topup is not None:
-            if isinstance(plan.primary, NewReleasesSource):
-                # Day-start: topup only fills a shortfall (FR-005) — New
-                # Releases alone usually already has enough candidates.
-                if len(stubs) < games_per_run:
-                    topup_used = True
-                    more = await self._fetch_listing(plan.topup)
-                    topup_count_target = len(more)
-                    stubs = stubs + more
-            else:
-                # Every later run of the day ALSO re-checks See All's page 1,
-                # unconditionally — its own cursor only moves forward and
-                # never revisits page 1, but the listing itself drifts (new
-                # games are added to page 1 all day), so without this,
-                # anything published after the day's first run is
-                # permanently missed once the cursor has advanced past it.
-                # Prioritized ahead of the long-tail primary batch in the
-                # truncation below, so drift recovery isn't starved by an
-                # already-full primary page.
-                topup_used = True
-                more = await self._fetch_listing(plan.topup)
-                topup_count_target = len(more)
-                more_slugs = {s.metacritic_slug for s in more}
-                stubs = more + [s for s in stubs if s.metacritic_slug not in more_slugs]
         stubs = stubs[:games_per_run]
 
         checked = 0
@@ -141,6 +130,9 @@ class IngestGamesUseCase:
             # which game a manual run is currently processing.
             run_row.meta = {"current_item": stub.metacritic_slug}
             await self._session.commit()
+
+            if await is_cancel_requested(self._session, run_row.id):
+                return self._mark_cancelled(run_row, checked, rejected)
 
             try:
                 html = await self._fetch_detail(stub)
@@ -206,6 +198,9 @@ class IngestGamesUseCase:
             run_row.meta = {"current_item": parsed.title}
             await self._session.commit()
 
+            if await is_cancel_requested(self._session, run_row.id):
+                return self._mark_cancelled(run_row, checked, rejected, accepted=primary_count)
+
             game, is_new = await self._game_repo.upsert(parsed)
             await self._game_repo.upsert_platform_scores(game, parsed)
             primary_count += 1
@@ -216,7 +211,7 @@ class IngestGamesUseCase:
                     run_id=run_row.id,
                     event_type="ingest_new" if is_new else "ingest_update",
                     created_at=datetime.now(UTC),
-                    details={"source": _source_name(plan.primary)}
+                    details={"source": _source_name(source)}
                 )
             )
 
@@ -232,19 +227,27 @@ class IngestGamesUseCase:
                 if needs_user:
                     await self._try_enrich(game, "user", user_n, growth_threshold, run_row.id)
 
-        new_state = advance_state(
-            domain_state,
-            plan,
-            primary_count=primary_count,
-            topup_used=topup_used,
-            topup_count=topup_count_target if topup_used else 0,
-        )
+        new_state = advance_state(domain_state, used_fallback=used_fallback, processed_count=primary_count)
         await self._ingest_state_repo.advance(new_state)
 
         run_row.status = "completed"
         run_row.finished_at = datetime.now(UTC)
         run_row.items_in = checked
         run_row.items_accepted = len(accepted_parsed)
+        run_row.items_rejected = rejected
+        return run_row
+
+    def _mark_cancelled(
+        self, run_row: PipelineRunORM, checked: int, rejected: int, accepted: int = 0
+    ) -> PipelineRunORM:
+        """Operator force-stop, seen at the next per-item checkpoint — same
+        "no cursor movement" rule as an aborted run (Gate A / reject ratio)
+        already follows, since ingest_state.advance() is simply never called."""
+        run_row.status = "cancelled"
+        run_row.finished_at = datetime.now(UTC)
+        run_row.error_message = "Cancelled by operator"
+        run_row.items_in = checked
+        run_row.items_accepted = accepted
         run_row.items_rejected = rejected
         return run_row
 

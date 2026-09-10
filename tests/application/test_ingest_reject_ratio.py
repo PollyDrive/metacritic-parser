@@ -16,6 +16,18 @@ def _config(max_reject_ratio=0.25):
     return config
 
 
+def _mock_session_execute():
+    """Default every `session.execute(...)` to a scalar result of None — a
+    plain AsyncMock's auto-created return value is truthy, which would make
+    `is_cancel_requested` (application/ingest.py) see every run as cancelled."""
+    def _result(*args, **kwargs):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    return AsyncMock(side_effect=_result)
+
+
 def _ingest_state_repo():
     repo = MagicMock()
     repo.get = AsyncMock(
@@ -23,7 +35,6 @@ def _ingest_state_repo():
             id=1,
             current_day=datetime.now(UTC).date(),
             day_processed_count=0,
-            day_new_releases_done=True,
             see_all_next_page=3,
             updated_at=datetime.now(UTC),
         )
@@ -66,9 +77,11 @@ async def test_run_aborts_and_does_not_advance_cursor_when_reject_ratio_exceeds_
 
     game_repo = MagicMock()
     game_repo.upsert = AsyncMock()
+    game_repo.filter_known_slugs = AsyncMock(return_value=set())
 
     session = AsyncMock()
     session.add = MagicMock()
+    session.execute = _mock_session_execute()
 
     ingest_state_repo = _ingest_state_repo()
     use_case = IngestGamesUseCase(
@@ -97,10 +110,10 @@ def _gate_a_use_case(monkeypatch, ingest_state_repo):
         lambda html: {"id": 1},
     )
     return IngestGamesUseCase(
-        session=AsyncMock(add=MagicMock()),
+        session=AsyncMock(add=MagicMock(), execute=_mock_session_execute()),
         config=_config(),
         ingest_state_repo=ingest_state_repo,
-        game_repo=MagicMock(upsert=AsyncMock()),
+        game_repo=MagicMock(upsert=AsyncMock(), filter_known_slugs=AsyncMock(return_value=set())),
         fetch_listing=AsyncMock(return_value=[GameStub(metacritic_slug="g1", metacritic_id=None)]),
         fetch_detail=AsyncMock(return_value="<html></html>"),
         fetch_reviews=AsyncMock(return_value="<html></html>"),

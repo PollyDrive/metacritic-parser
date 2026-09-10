@@ -44,6 +44,7 @@ class PipelineRunORM(Base):
     source: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    cancel_requested: Mapped[bool] = mapped_column(nullable=False, default=False)
 
 
 class PipelineRejectORM(Base):
@@ -166,7 +167,6 @@ class IngestStateORM(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     current_day: Mapped[date] = mapped_column(nullable=False)
     day_processed_count: Mapped[int] = mapped_column(nullable=False, default=0)
-    day_new_releases_done: Mapped[bool] = mapped_column(nullable=False, default=False)
     see_all_next_page: Mapped[int] = mapped_column(nullable=False, default=1)
     updated_at: Mapped[datetime]
 

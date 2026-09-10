@@ -63,7 +63,11 @@ def _find_title_userscore(array: list, metacritic_id: int) -> float | None:
             continue
         resolved = resolve(array, i)
         score = (resolved.get("userScore") or {}).get("score")
-        if score is not None:
+        # Every brand-new, zero-user-rating game observed live came back as a
+        # literal `score: 0` (not a missing key, not null) — Metacritic's own
+        # UI never shows an exact 0.0 average, it shows "tbd" until enough
+        # ratings exist, so treat 0 the same as absent rather than a real score.
+        if score:
             return float(score)
     return None
 

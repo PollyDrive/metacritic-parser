@@ -111,8 +111,7 @@ require (research.md §12).
 | `id` | smallint PK, check `id = 1` | singleton |
 | `current_day` | date, not null | the day `day_processed_count` refers to, in `ingest.timezone` |
 | `day_processed_count` | integer, not null default 0 | resets when `current_day` rolls over (FR-005) |
-| `day_new_releases_done` | boolean, not null default false | whether today's "New Releases" pass is exhausted (drives the FR-005 top-up) |
-| `see_all_next_page` | integer, not null default 1 | pagination cursor into "See All / Newest" (FR-003) |
+| `see_all_next_page` | integer, not null default 1 | pagination cursor into "See All / Newest" (FR-003) — advances only on a run that actually fell back to this source |
 | `updated_at` | timestamptz, not null default now() | |
 
 **Why a cursor is not optional**: without it, a restart silently resumes from page 1 and
