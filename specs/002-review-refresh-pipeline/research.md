@@ -34,6 +34,22 @@ already used by initial ingest) — rejected: it would silently re-run full-reco
 count-only check (spec.md Assumptions: "no new discovery or admission logic changes"), and it
 still wouldn't give a user review count.
 
+**Superseded during implementation**: the decision above (sum `reviewCount` across every
+platform block for a game-level user total, and use the SSR page's own aggregate for critic)
+was replaced once `infrastructure/scraper/review_api.py` was built against Metacritic's
+undocumented `backend.metacritic.com` JSON review API. That API exposes an accurate
+per-platform review count *and* paginates past the SSR page's fixed 10-review cap, so the
+shipped design instead does a cheap per-platform stats sweep (`pick_best_platform`) and tracks
+growth against whichever single platform currently has the most reviews for that audience —
+not a cross-platform sum. Rationale: reviews are split per platform on Metacritic, so summing
+incomparable pools (e.g. a PS5 review base and a wildly different PC one) is less
+representative of what a visitor on either platform actually sees than picking the platform
+with the deepest, most current review base and summarizing from it (`application/enrichment.py`
+module docstring). The SSR-page approach remains as the fallback when the JSON API's shape
+breaks. `review_summaries.total_reviews_count`/`sampled_reviews_count`/`source_url`/
+`source_platform` (migration 011) replace the originally-planned single
+`review_count_at_generation` column to carry this provenance.
+
 ## 2. Persisting the count a summary was generated at
 
 **Decision**: Add `review_count_at_generation` directly to the existing `review_summaries` row

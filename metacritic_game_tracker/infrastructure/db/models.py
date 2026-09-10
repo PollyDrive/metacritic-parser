@@ -78,6 +78,23 @@ class LlmCallORM(Base):
     created_at: Mapped[datetime]
 
 
+class LlmModelCostORM(Base):
+    """Maps the pre-existing `meta.llm_model_costs` table (sql/migrations/000_meta.sql)."""
+
+    __tablename__ = "llm_model_costs"
+    __table_args__ = {"schema": "meta"}
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    input_cost_per_1m: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    output_cost_per_1m: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    context_window: Mapped[int | None]
+    valid_from: Mapped[date]
+    valid_until: Mapped[date | None]
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
 class GameORM(Base):
     __tablename__ = "games"
 

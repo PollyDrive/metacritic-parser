@@ -34,10 +34,11 @@
       {% for p in pipelines %}
       <div class="pipeline-card" data-kind="{{ p.kind }}">
         <div class="pipeline-card-head">
-          <h3>{{ {"ingest": "Ingest", "review_refresh": "Review Refresh", "playthrough": "Playthrough"}[p.kind] }}</h3>
           <span class="pipeline-badge status-{{ p.latest.status if p.latest else 'idle' }}">
-            {% if p.latest and p.latest.status == "running" and p.latest.current_item %}
-              Running… {{ p.latest.current_item }}
+            {% set p_name = {"ingest": "Ingest", "review_refresh": "Review Refresh", "playthrough": "Playthrough"}[p.kind] %}
+            <strong>{{ p_name }}</strong> &mdash;
+            {% if p.latest and p.latest.status == "running" %}
+              Running…
             {% else %}
               {{ p.latest.status if p.latest else "never run" }}
             {% endif %}
@@ -99,8 +100,8 @@
                   <tbody>
                     {% for event in run.events %}
                     <tr>
-                      <td style="white-space: nowrap">{{ event.created_at.strftime("%H:%M:%S") }}</td>
-                      <td><a href="/games/{{ event.game.metacritic_slug }}">{{ event.game.title }}</a></td>
+                      <td style="white-space: nowrap">{{ event.time }}</td>
+                      <td><a href="/games/{{ event.game_slug }}">{{ event.game_title }}</a></td>
                       <td><span class="pipeline-badge">{{ event.event_type }}</span></td>
                       <td>
                         {% if event.event_type == "review_refresh" %}
@@ -110,7 +111,7 @@
                           total {{ event.details.reviews_found }}
                         {% elif event.event_type == "playthrough_generated" %}
                           <a href="{{ event.details.video_url }}" target="_blank">View video</a>
-                        {% elif event.details.source %}
+                        {% elif event.details and event.details.source %}
                           {{ event.details.source }}
                         {% endif %}
                       </td>
@@ -159,7 +160,7 @@
               </td>
               <td><strong><a href="/games/{{ group.game.metacritic_slug }}">{{ group.game.title }}</a></strong></td>
               <td colspan="3" style="color: var(--text-dim); font-size: 0.85rem;">
-                {{ group.events|length }} event(s) &middot; Latest: {{ group.events[0].created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}
+                {{ group.events|length }} event(s) &middot; Latest: {{ group.latest_time }}
               </td>
             </tr>
             <tr id="activity-game-{{ group.game.id }}" class="run-events-row" hidden>
@@ -171,8 +172,8 @@
                   <tbody>
                     {% for event in group.events %}
                     <tr>
-                      <td style="white-space: nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
-                      <td><span class="pipeline-badge">{{ event.run.stage if event.run else "unknown" }}</span></td>
+                      <td style="white-space: nowrap">{{ event.time }}</td>
+                      <td><span class="pipeline-badge">{{ event.stage }}</span></td>
                       <td>{{ event.event_type }}</td>
                       <td>
                         {% if event.details %}
@@ -242,7 +243,8 @@
       const card = cardFor(kind);
       if (!card) return;
       const el = card.querySelector(".pipeline-badge");
-      el.textContent = text;
+      const names = {"ingest": "Ingest", "review_refresh": "Review Refresh", "playthrough": "Playthrough"};
+      el.innerHTML = "<strong>" + names[kind] + "</strong> &mdash; " + text;
       el.className = "pipeline-badge status-" + (level || "idle");
     }
 
@@ -272,7 +274,7 @@
       const btn = document.querySelector('.run-btn[data-kind="' + run.stage + '"]');
       if (run.status === "running") {
         if (btn) btn.disabled = true;
-        showStatus(run.stage, run.current_item ? "Running… " + run.current_item : "Running…", "running");
+        showStatus(run.stage, "Running…", "running");
       } else if (run.status === "completed" || run.status === "failed") {
         if (btn && btn.disabled) {
           showStatus(

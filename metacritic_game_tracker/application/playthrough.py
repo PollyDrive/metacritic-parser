@@ -7,6 +7,7 @@ findable playthrough is a normal outcome, not an error (data-model.md).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from metacritic_game_tracker.application.backfill import RunBudgetExhausted
 from metacritic_game_tracker.infrastructure.db.models import (
@@ -31,13 +32,18 @@ def _build_prompt(transcript: str) -> str:
     )
 
 
+async def _zero_cost(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    return Decimal("0")
+
+
 class FindPlaythroughTakeawayUseCase:
-    def __init__(self, session, budget, search_videos, get_transcript, llm_call):
+    def __init__(self, session, budget, search_videos, get_transcript, llm_call, get_cost_usd=None):
         self._session = session
         self._budget = budget
         self._search_videos = search_videos
         self._get_transcript = get_transcript
         self._llm_call = llm_call
+        self._get_cost_usd = get_cost_usd or _zero_cost
 
     async def run(self, game, run_id: int | None = None) -> bool:
         today = datetime.now(UTC).date()
@@ -91,11 +97,13 @@ class FindPlaythroughTakeawayUseCase:
             raise
 
         now = datetime.now(UTC)
+        cost_usd = await self._get_cost_usd(model, input_tokens, output_tokens)
         self._session.add(
             LlmCallORM(
                 call_type="playthrough_takeaway",
                 game_id=game.id,
                 model=model,
+                cost_usd=cost_usd,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 status="ok",

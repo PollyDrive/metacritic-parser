@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -214,6 +215,42 @@ async def test_a_recheck_below_the_growth_threshold_makes_no_llm_call_and_change
     fetch_review_json.assert_awaited_once()  # exactly one request: the one platform's stats probe
 
 
+async def test_a_recheck_below_threshold_still_advances_next_refresh_at():
+    """FR-005/FR-007/SC-002: a recheck that doesn't clear the threshold must
+    still push the decay-curve clock forward — otherwise the game stays
+    'due' and gets re-fetched every single tick forever instead of waiting
+    out its configured interval."""
+    existing = _summary_row(total_reviews_count=90)
+    session = _session_with_existing(existing)
+    summarize = AsyncMock()
+    fetch_review_json = AsyncMock(return_value=_stats_json(95))  # +5, under threshold 10
+    use_case = ReviewEnrichmentUseCase(session, AsyncMock(), summarize, fetch_review_json=fetch_review_json)
+
+    game = _game()
+    await use_case.run(game, "critic", sample_size=50, growth_threshold=10)
+
+    summarize.assert_not_awaited()
+    assert game.next_refresh_at is not None
+
+
+async def test_a_lower_observed_count_than_recorded_is_not_growth():
+    """Edge case: Metacritic removed reviews (spam cleanup) — a drop must
+    never be treated as growth, and must not touch the existing summary or
+    its recorded count."""
+    existing = _summary_row(total_reviews_count=90)
+    session = _session_with_existing(existing)
+    summarize = AsyncMock()
+    fetch_review_json = AsyncMock(return_value=_stats_json(80))  # dropped from 90 to 80
+    use_case = ReviewEnrichmentUseCase(session, AsyncMock(), summarize, fetch_review_json=fetch_review_json)
+
+    result = await use_case.run(_game(), "critic", sample_size=50, growth_threshold=10)
+
+    assert result is None
+    summarize.assert_not_awaited()
+    assert existing.summary_text == "old"
+    assert existing.total_reviews_count == 90
+
+
 async def test_a_recheck_at_or_above_the_growth_threshold_regenerates():
     existing = _summary_row(total_reviews_count=90)
     session = _session_with_existing(existing)
@@ -410,6 +447,24 @@ async def test_records_a_failed_llm_call_when_summarization_raises():
     assert added[0].call_type == "critic_summary"
     assert "LLM timeout" in added[0].error_message
     assert session.execute.await_count == 1  # the row lookup, but never reached the summary upsert
+
+
+async def test_records_cost_usd_on_the_successful_llm_call_via_the_injected_lookup():
+    session = _session_with_existing(None)
+    summarize = AsyncMock(
+        return_value=MagicMock(summary_text="text", input_tokens=10, output_tokens=5, model="claude-haiku-4-5")
+    )
+    get_cost_usd = AsyncMock(return_value=Decimal("0.000042"))
+    use_case = ReviewEnrichmentUseCase(
+        session, AsyncMock(), summarize, fetch_review_json=_fetch_json_for(1, ["quote"]),
+        get_cost_usd=get_cost_usd,
+    )
+
+    await use_case.run(_game(), "critic", sample_size=50, growth_threshold=1)
+
+    call = next(c.args[0] for c in session.add.call_args_list if type(c.args[0]).__name__ == "LlmCallORM")
+    assert call.cost_usd == Decimal("0.000042")
+    get_cost_usd.assert_awaited_once_with("claude-haiku-4-5", 10, 5)
 
 
 async def test_never_schedules_a_refresh_when_release_date_is_unresolved():

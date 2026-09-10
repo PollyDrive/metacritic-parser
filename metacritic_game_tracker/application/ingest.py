@@ -66,11 +66,13 @@ class IngestGamesUseCase:
         self._summarize = summarize
 
         from metacritic_game_tracker.application.enrichment import ReviewEnrichmentUseCase
+        from metacritic_game_tracker.infrastructure.llm.cost import get_cost_usd
         self._review_enrichment_use_case = ReviewEnrichmentUseCase(
             session=self._session,
             fetch_reviews=self._fetch_reviews,
             summarize=self._summarize,
             fetch_review_json=fetch_review_json,
+            get_cost_usd=lambda model, i, o: get_cost_usd(self._session, model, i, o),
         )
 
     async def run(self) -> PipelineRunORM:

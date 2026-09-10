@@ -23,6 +23,11 @@ EN_LABELS: dict[str, str] = {
     "backfill.max_attempts": "Attempts before abandoning",
     "backfill.backoff_base_minutes": "Exponential backoff base, min",
     "dq.max_reject_ratio": "Rejection threshold to stop run",
+    "reviews.growth_threshold": "Review growth to trigger re-summary",
+    "review_refresh.recent_tier_days": "Recheck interval, games <1wk old (days)",
+    "review_refresh.mid_tier_days": "Recheck interval, games 1-4wk old (days)",
+    "review_refresh.max_age_weeks": "Refresh cutoff age (weeks)",
+    "review_refresh.games_per_run": "Games rechecked per run",
 }
 
 # Explanations of why the setting is needed — one or two sentences longer than EN_LABELS,

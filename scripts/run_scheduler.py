@@ -164,23 +164,33 @@ async def _run_review_refresh(session, http_client: httpx.AsyncClient) -> None:
         return await summarize_reviews(quotes, audience, llm_call)
 
     from metacritic_game_tracker.application.enrichment import ReviewEnrichmentUseCase
-    review_use_case = ReviewEnrichmentUseCase(session, fetch_reviews, summarize, fetch_review_json)
+    from metacritic_game_tracker.infrastructure.llm.cost import get_cost_usd
+    review_use_case = ReviewEnrichmentUseCase(
+        session, fetch_reviews, summarize, fetch_review_json,
+        get_cost_usd=lambda model, i, o: get_cost_usd(session, model, i, o),
+    )
 
     critic_n = await config.get_int("reviews.critic_sample_size")
     user_n = await config.get_int("reviews.user_sample_size")
     growth_threshold = await config.get_int("reviews.growth_threshold")
+    recent_tier_days = await config.get_int("review_refresh.recent_tier_days")
+    mid_tier_days = await config.get_int("review_refresh.mid_tier_days")
+    max_age_weeks = await config.get_int("review_refresh.max_age_weeks")
+    games_per_run = await config.get_int("review_refresh.games_per_run")
 
     async def do_work_for_step(step, game, run_id):
         is_critic = step == "critic_summary"
         audience = "critic" if is_critic else "user"
         sample_size = critic_n if is_critic else user_n
         await review_use_case.run(
-            game, audience, sample_size=sample_size, growth_threshold=growth_threshold, run_id=run_id
+            game, audience, sample_size=sample_size, growth_threshold=growth_threshold, run_id=run_id,
+            recent_tier_days=recent_tier_days, mid_tier_days=mid_tier_days, max_age_weeks=max_age_weeks,
         )
 
     use_case = BackfillEnrichmentUseCase(session, config)
     run_row = await use_case.run(
-        do_work_for_step, stage="review_refresh", steps=("critic_summary", "user_summary")
+        do_work_for_step, stage="review_refresh", steps=("critic_summary", "user_summary"),
+        games_per_run=games_per_run,
     )
     log.info("Review refresh finished: status=%s items_in=%s", run_row.status, run_row.items_in)
 
@@ -197,6 +207,8 @@ async def _run_playthrough(session, http_client: httpx.AsyncClient) -> PipelineR
     async def llm_call(route, prompt):
         return await call_llm(route, prompt, http_client)
 
+    from metacritic_game_tracker.infrastructure.llm.cost import get_cost_usd
+
     async def do_work_for_step(step, game, run_id):
         playthrough_use_case = FindPlaythroughTakeawayUseCase(
             session=session,
@@ -204,6 +216,7 @@ async def _run_playthrough(session, http_client: httpx.AsyncClient) -> PipelineR
             search_videos=lambda q: yt_search_videos(q, http_client, os.environ["YOUTUBE_API_KEY"]),
             get_transcript=yt_get_transcript,
             llm_call=llm_call,
+            get_cost_usd=lambda model, i, o: get_cost_usd(session, model, i, o),
         )
         return await playthrough_use_case.run(game, run_id=run_id)
 

@@ -107,6 +107,20 @@ def _stage_session(last_finished_at):
     return session
 
 
+async def test_decides_ingest_due_ness_from_ingest_stage_runs_only():
+    """FR-003/SC-004: a manual or scheduled ingest run's timing must be
+    unaffected by how many games are queued for review_refresh in the same
+    tick — decide()'s own due-check is scoped strictly to stage='ingest',
+    never touching review_refresh's or playthrough's pipeline_runs rows."""
+    session = _session(pending_request=None, last_finished_at=None)
+
+    await decide(session, _config(), now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
+
+    last_run_stmt = session.execute.call_args_list[1].args[0]
+    compiled = str(last_run_stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "stage = 'ingest'" in compiled
+
+
 async def test_stage_due_when_the_stage_has_never_completed_a_run():
     session = _stage_session(last_finished_at=None)
 

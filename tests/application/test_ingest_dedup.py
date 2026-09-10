@@ -118,6 +118,39 @@ async def test_enrichment_runs_for_a_newly_admitted_game(monkeypatch):
     assert summarize.await_count == 2  # critic + user
 
 
+async def test_initial_ingest_records_total_reviews_count_at_first_summarization(monkeypatch):
+    """FR-002/Acceptance Scenario 3: the initial ingest pipeline itself must
+    record the review count a summary was generated at — not depend on a
+    later refresh pass ever running for that to happen."""
+    parsed = _parsed(1)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.build_parsed_game", lambda resolved: parsed)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.parse_reviews",
+        lambda html, sample_size: ["quote 1", "quote 2"],
+    )
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    use_case, session = _use_case(
+        game_repo, _ingest_state_repo(), fetch_detail=AsyncMock(return_value=_GAME_HTML),
+    )
+
+    await use_case.run()
+
+    from metacritic_game_tracker.infrastructure.db.models import ReviewSummaryORM
+    added_summaries = [c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], ReviewSummaryORM)]
+    assert len(added_summaries) == 2  # critic + user
+    for row in added_summaries:
+        assert row.total_reviews_count == 2
+
+
 async def test_a_review_summarization_failure_does_not_abort_the_whole_run(monkeypatch):
     """Caught live (T072): a bad/missing LLM API key raised from inside
     _summarize_and_store, uncaught, crashed the whole run and rolled back every

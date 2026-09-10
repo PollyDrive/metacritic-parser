@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 from metacritic_game_tracker.application.backfill import RunBudgetExhausted
@@ -193,3 +194,31 @@ async def test_truncates_an_oversized_transcript_before_sending_it_to_the_llm(mo
 
     sent_prompt = llm_call.await_args.args[1]
     assert len(sent_prompt) < len(oversized_transcript)
+
+
+async def test_records_cost_usd_on_the_successful_llm_call_via_the_injected_lookup(mock_session):
+    candidate = VideoCandidate(
+        video_id="abc123", title="Elden Ring Playthrough", view_count=99999, has_captions=True
+    )
+
+    async def search_videos(query: str):
+        return [candidate]
+
+    get_transcript = AsyncMock(return_value="transcript text")
+    llm_call = AsyncMock(return_value=("Takeaway.", 500, 100, "claude-haiku-4-5"))
+    get_cost_usd = AsyncMock(return_value=Decimal("0.00091"))
+
+    use_case = FindPlaythroughTakeawayUseCase(
+        session=mock_session,
+        budget=_budget(),
+        search_videos=search_videos,
+        get_transcript=get_transcript,
+        llm_call=llm_call,
+        get_cost_usd=get_cost_usd,
+    )
+
+    await use_case.run(_game())
+
+    call = next(c.args[0] for c in mock_session.add.call_args_list if type(c.args[0]).__name__ == "LlmCallORM")
+    assert call.cost_usd == Decimal("0.00091")
+    get_cost_usd.assert_awaited_once_with("claude-haiku-4-5", 500, 100)

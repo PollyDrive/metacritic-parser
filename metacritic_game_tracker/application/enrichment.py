@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import httpx
 from sqlalchemy import select
@@ -50,21 +51,31 @@ log = logging.getLogger(__name__)
 _API_FAILURES = (ReviewApiShapeError, httpx.HTTPError, ScrapeBlockedError)
 
 
+async def _zero_cost(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    return Decimal("0")
+
+
 class ReviewEnrichmentUseCase:
-    def __init__(self, session: AsyncSession, fetch_reviews, summarize, fetch_review_json):
+    def __init__(self, session: AsyncSession, fetch_reviews, summarize, fetch_review_json, get_cost_usd=None):
         """
         fetch_reviews: async (slug: str, audience: str) -> str (HTML) — SSR fallback
         summarize: async (quotes: list[str], audience: str) -> result
         fetch_review_json: async (url: str) -> str (JSON body) — the review API
+        get_cost_usd: async (model: str, input_tokens: int, output_tokens: int) -> Decimal —
+            defaults to a zero-cost stub so existing/unit-test call sites that don't care about
+            billing don't need to wire one; production wiring (scripts/run_scheduler.py,
+            application/ingest.py) passes the real meta.llm_model_costs-backed lookup.
         """
         self._session = session
         self._fetch_reviews = fetch_reviews
         self._summarize = summarize
         self._fetch_review_json = fetch_review_json
+        self._get_cost_usd = get_cost_usd or _zero_cost
 
     async def run(
         self, game: GameORM, audience: str, sample_size: int, growth_threshold: int = 1,
-        run_id: int | None = None,
+        run_id: int | None = None, recent_tier_days: int = 3, mid_tier_days: int = 7,
+        max_age_weeks: int = 4,
     ) -> None:
         """Fetch (if due), summarize, and upsert a review summary, pushing the
         TTL forward only once a replacement is actually ready. Never deletes
@@ -101,7 +112,13 @@ class ReviewEnrichmentUseCase:
             slug, audience, sample_size, growth_threshold, previous_total, pick
         )
         if quotes is None:
-            return  # not due yet — no LLM call, nothing else on disk changes
+            # Below-threshold recheck: no LLM call, no summary change — but the
+            # decay-curve clock still advances, or this game would stay "due"
+            # and get re-fetched on every single tick forever (FR-005/SC-002).
+            game.next_refresh_at = calculate_next_refresh(
+                game.release_date, datetime.now(UTC), recent_tier_days, mid_tier_days, max_age_weeks
+            )
+            return
         if not quotes:
             raise ValueError(f"No {audience} reviews found")
 
@@ -126,12 +143,14 @@ class ReviewEnrichmentUseCase:
             raise
 
         now = datetime.now(UTC)
+        cost_usd = await self._get_cost_usd(result.model, result.input_tokens, result.output_tokens)
 
         self._session.add(
             LlmCallORM(
                 call_type=f"{audience}_summary",
                 game_id=game.id,
                 model=result.model,
+                cost_usd=cost_usd,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 status="ok",
@@ -203,7 +222,9 @@ class ReviewEnrichmentUseCase:
         # release_date. Falling back to first_seen_at here would misrepresent
         # a game as freshly-released and schedule refreshes the TTL policy
         # never intended.
-        game.next_refresh_at = calculate_next_refresh(game.release_date, now)
+        game.next_refresh_at = calculate_next_refresh(
+            game.release_date, now, recent_tier_days, mid_tier_days, max_age_weeks
+        )
 
     async def _fetch_due(
         self, slug: str, audience: str, sample_size: int, growth_threshold: int,

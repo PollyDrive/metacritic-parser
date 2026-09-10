@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 
@@ -110,17 +111,37 @@ def normalize_genres(raw_genres: list[str]) -> list[str]:
     return result
 
 
-def calculate_next_refresh(release_date: date | None, current_time: datetime) -> datetime | None:
+def calculate_next_refresh(
+    release_date: date | None,
+    current_time: datetime,
+    recent_tier_days: int = 3,
+    mid_tier_days: int = 7,
+    max_age_weeks: int = 4,
+) -> datetime | None:
     """Implement Decayed TTL review refresh based on game age.
-    - Age < 7 days: Refresh every 3 days.
-    - Age 7 to 28 days: Refresh every 7 days.
-    - Age > 28 days or missing release_date: Never refresh.
+    - Age < 7 days: refresh every `recent_tier_days` (FR-010: operator-tunable).
+    - Age 7 days to `max_age_weeks` weeks: refresh every `mid_tier_days`.
+    - Older, or missing release_date: never refresh.
+
+    The 7-day boundary between the two tiers is fixed (spec.md's own bucket
+    definition); only the recheck cadence within each tier and the outer
+    cutoff age are configurable.
     """
     if not release_date:
         return None
     age = (current_time.date() - release_date).days
     if age < 7:
-        return current_time + timedelta(days=3)
-    if age <= 28:
-        return current_time + timedelta(days=7)
+        return current_time + timedelta(days=recent_tier_days)
+    if age <= max_age_weeks * 7:
+        return current_time + timedelta(days=mid_tier_days)
     return None
+
+
+def calculate_llm_cost(
+    input_tokens: int, output_tokens: int, input_cost_per_1m: Decimal, output_cost_per_1m: Decimal
+) -> Decimal:
+    """Cost of one LLM call from per-million-token rates (meta.llm_model_costs)."""
+    million = Decimal(1_000_000)
+    return (Decimal(input_tokens) / million) * Decimal(input_cost_per_1m) + (
+        Decimal(output_tokens) / million
+    ) * Decimal(output_cost_per_1m)

@@ -105,7 +105,9 @@ class BackfillEnrichmentUseCase:
             )
             return StepOutcome("retrying", attempt)
 
-    async def _games_missing(self, step: Step) -> list[tuple[GameORM, EnrichmentAttemptORM | None]]:
+    async def _games_missing(
+        self, step: Step, limit: int | None = None
+    ) -> list[tuple[GameORM, EnrichmentAttemptORM | None]]:
         if step == "detail_fields":
             # FR-028: a recoverable-field gap (description/developer/cover_image)
             # must queue for re-extraction, not sit unfilled forever — Gate B
@@ -141,7 +143,10 @@ class BackfillEnrichmentUseCase:
                         GameORM.next_refresh_at <= datetime.now(UTC)
                     )
                 )
+                .order_by(GameORM.first_seen_at.desc())
             )
+            if limit is not None:
+                stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         games = list(result.scalars().unique().all())
 
@@ -155,7 +160,9 @@ class BackfillEnrichmentUseCase:
             pairs.append((game, attempt_result.scalar_one_or_none()))
         return pairs
 
-    async def run(self, do_work_for_step, stage: str, steps: tuple[Step, ...]) -> PipelineRunORM:
+    async def run(
+        self, do_work_for_step, stage: str, steps: tuple[Step, ...], games_per_run: int | None = None
+    ) -> PipelineRunORM:
         """`do_work_for_step(step, game)` performs the actual enrichment call.
 
         Owns its own `pipeline_runs` row (like `IngestGamesUseCase`), committed
@@ -176,7 +183,7 @@ class BackfillEnrichmentUseCase:
         for step in steps:
             if stopped_early:
                 break
-            for game, attempt in await self._games_missing(step):
+            for game, attempt in await self._games_missing(step, limit=games_per_run):
                 items_in += 1
                 # Committed per item (not only in the batch's final commit) so a
                 # concurrent viewer — the monitoring page's SSE poll — can show

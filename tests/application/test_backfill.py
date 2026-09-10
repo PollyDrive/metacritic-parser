@@ -129,6 +129,65 @@ async def test_games_missing_for_detail_fields_targets_missing_recoverable_colum
     assert "cover_image_url" in compiled
 
 
+async def test_games_missing_for_review_steps_orders_youngest_first_and_respects_a_limit(mock_session):
+    """FR-012: when a pass can't process every due game, younger games go
+    first — mirrors the existing playthrough ordering test above."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case._games_missing("critic_summary", limit=20)
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "order by" in compiled
+    assert "first_seen_at" in compiled
+    assert "limit 20" in compiled
+
+
+async def test_games_missing_without_a_limit_is_unbounded(mock_session):
+    """detail_backfill/playthrough callers don't pass a cap — today's
+    unbounded behavior for them must not change."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case._games_missing("user_summary")
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit" not in compiled
+
+
+async def test_run_threads_games_per_run_through_to_games_missing_as_the_limit(mock_session):
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case.run(AsyncMock(), stage="review_refresh", steps=("critic_summary",), games_per_run=20)
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit 20" in compiled
+
+
+async def test_run_without_games_per_run_stays_unbounded(mock_session):
+    """detail_backfill/playthrough callers omit games_per_run entirely."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    mock_session.execute.return_value = result
+    use_case = BackfillEnrichmentUseCase(mock_session, _config())
+
+    await use_case.run(AsyncMock(), stage="detail_backfill", steps=("detail_fields",))
+
+    stmt = mock_session.execute.call_args_list[0].args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "limit" not in compiled
+
+
 async def test_run_creates_and_completes_its_own_pipeline_run_row(mock_session):
     """Each pipeline gets its own visible pipeline_runs row (monitoring shows
     independent status per pipeline, not one shared 'backfill' blob)."""
@@ -152,7 +211,7 @@ async def test_run_counts_items_in_and_items_accepted(mock_session):
     game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None)]
 
     use_case._games_missing = fake_games_missing
@@ -179,7 +238,7 @@ async def test_run_does_not_count_a_no_op_result_as_accepted(mock_session):
     game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="G1")
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None)]
 
     use_case._games_missing = fake_games_missing
@@ -206,7 +265,7 @@ async def test_run_stops_early_and_records_one_reject_when_do_work_signals_budge
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="G2")
     game3 = GameORM(id=3, metacritic_id=3, metacritic_slug="g3", title="G3")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None), (game3, None)]
 
     use_case._games_missing = fake_games_missing
@@ -235,7 +294,7 @@ async def test_run_updates_current_item_in_meta_as_it_processes_each_game(mock_s
     game1 = GameORM(id=1, metacritic_id=1, metacritic_slug="g1", title="Elden Ring")
     game2 = GameORM(id=2, metacritic_id=2, metacritic_slug="g2", title="Valheim")
 
-    async def fake_games_missing(step):
+    async def fake_games_missing(step, limit=None):
         return [(game1, None), (game2, None)]
 
     use_case._games_missing = fake_games_missing

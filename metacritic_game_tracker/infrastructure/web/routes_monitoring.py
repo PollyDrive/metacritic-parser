@@ -146,6 +146,15 @@ async def monitoring_status(
     all_rejects = list(rejects_result.scalars().all())
 
     error_log = []
+    failed_runs = [r for r in run_rows if r.status == "failed" and r.error_message]
+    for r in failed_runs:
+        error_log.append({
+            "timestamp": r.started_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
+            "sort_time": r.started_at,
+            "pipeline": r.stage,
+            "item_ref": "Pipeline Run",
+            "error_message": r.error_message
+        })
     for r in all_rejects:
         error_log.append({
             "timestamp": r.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
@@ -206,7 +215,16 @@ async def monitoring_status(
     runs = []
     for r in run_rows:
         formatted = _format_run(r)
-        formatted["events"] = events_by_run.get(r.id, [])
+        formatted["events"] = [
+            {
+                "time": e.created_at.astimezone(_TZ_DISPLAY).strftime("%H:%M:%S"),
+                "game_title": e.game.title,
+                "game_slug": e.game.metacritic_slug,
+                "event_type": e.event_type,
+                "details": e.details
+            }
+            for e in events_by_run.get(r.id, [])
+        ]
         formatted["rejects"] = [
             {
                 "time": rj.created_at.astimezone(_TZ_DISPLAY).strftime("%H:%M:%S"),
@@ -229,7 +247,8 @@ async def monitoring_status(
             pipeline["coverage"] = {"covered": games_with_playthrough, "total": total_games}
 
     activity_result = await session.execute(
-        select(GameActivityEventORM).order_by(GameActivityEventORM.created_at.desc())
+        select(GameActivityEventORM)
+        .order_by(GameActivityEventORM.created_at.desc())
     )
     activity_feed = activity_result.scalars().all()
 
@@ -240,9 +259,15 @@ async def monitoring_status(
             activity_by_game[event.game_id] = []
             ordered_activity_groups.append({
                 "game": event.game,
+                "latest_time": event.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S UTC+8"),
                 "events": activity_by_game[event.game_id]
             })
-        activity_by_game[event.game_id].append(event)
+        activity_by_game[event.game_id].append({
+            "time": event.created_at.astimezone(_TZ_DISPLAY).strftime("%Y-%m-%d %H:%M:%S"),
+            "stage": event.run.stage if event.run else "unknown",
+            "event_type": event.event_type,
+            "details": event.details
+        })
 
     return request.app.state.templates.TemplateResponse(
         request, "monitoring.html", {
