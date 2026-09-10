@@ -66,6 +66,24 @@ class BackfillEnrichmentUseCase:
         try:
             result = await do_work(game)
             produced = True if result is None else bool(result)
+            
+            if not produced:
+                # The step explicitly skipped (e.g. no transcript available).
+                # Abandon it so we don't endlessly retry the exact same failure on the next run.
+                if attempt is None:
+                    attempt = EnrichmentAttemptORM(
+                        game_id=game.id,
+                        step=step,
+                        attempts=1,
+                        state="abandoned",
+                        last_attempt_at=datetime.now(UTC),
+                        next_retry_at=datetime.now(UTC) + timedelta(days=3650),
+                    )
+                    self._session.add(attempt)
+                else:
+                    attempt.state = "abandoned"
+                attempt.last_error = "Skipped expectedly (e.g., no transcript)"
+
             return StepOutcome("succeeded", attempt, produced=produced)
         except RunBudgetExhausted:
             raise  # a run-wide stop signal, not a per-item failure — let run() handle it

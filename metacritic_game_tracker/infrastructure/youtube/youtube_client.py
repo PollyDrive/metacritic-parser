@@ -41,6 +41,7 @@ async def search_videos(
             "type": "video",
             "maxResults": _MAX_RESULTS,
             "key": api_key,
+            "relevanceLanguage": "en",
         },
     )
     search_resp.raise_for_status()
