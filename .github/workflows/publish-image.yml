@@ -263,6 +263,14 @@ jobs:
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d --force-recreate
 
+            # env_file values are copied into each container at create time
+            # (the step above) — nothing downstream reads the host-side file
+            # again (`docker compose exec` below execs into the already-
+            # running container, inheriting its env directly, not re-reading
+            # env_file). No reason to leave a plaintext secrets file
+            # sitting on disk between deploys once containers are up.
+            rm -f .env
+
             # Ждём готовности DB: pg_isready в цикле (до 90 секунд).
             # sleep 10 не хватает при первом запуске — postgres инициализирует
             # data directory, это занимает 30–60 секунд.
