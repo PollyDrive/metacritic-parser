@@ -99,6 +99,7 @@ jobs:
         run: |
           if [ -n "$VPS_HOST" ] && [ -n "$VPS_USER" ] && [ -n "$VPS_SSH_KEY" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "VPS_APP_DIR=${VPS_APP_DIR:-~/metacritic-game-tracker}" >> "$GITHUB_ENV"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::VPS secrets not fully configured — skipping deploy"
@@ -146,30 +147,6 @@ jobs:
           APP_HOST_PORT: ${{ env.APP_HOST_PORT }}
           DB_HOST_PORT: ${{ env.DB_HOST_PORT }}
 
-      - name: Render .env for VPS
-        if: steps.check.outputs.configured == 'true'
-        run: |
-          # Строим .env из GitHub Secrets — только переменные приложения,
-          # без SSH-ключей и служебных токенов CI
-          cat > .deploy-rendered/.env << 'ENVEOF'
-          POSTGRES_DB=${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
-          POSTGRES_USER=${{ secrets.POSTGRES_USER || 'postgres' }}
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          DATABASE_URL=postgresql+asyncpg://${{ secrets.POSTGRES_USER || 'postgres' }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
-          OPENCODE_BASE_URL=${{ secrets.OPENCODE_BASE_URL }}
-          OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }}
-          YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
-          MONITORING_USERNAME=${{ secrets.MONITORING_USERNAME }}
-          MONITORING_PASSWORD=${{ secrets.MONITORING_PASSWORD }}
-          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-          ALERT_EMAIL_TO=${{ secrets.ALERT_EMAIL_TO }}
-          APP_ENV=prod
-          LOGS_DIR=logs
-          APP_PORT=8080
-          ENVEOF
-          # Убираем отступы (heredoc + indentation)
-          sed -i 's/^[[:space:]]*//' .deploy-rendered/.env
-
       - name: Copy deploy files to VPS
         if: steps.check.outputs.configured == 'true'
         uses: appleboy/scp-action@v0.1.7
@@ -189,19 +166,7 @@ jobs:
           # consumes scripts/ from the host anyway: migrate.py runs via
           # `docker compose exec app python scripts/migrate.py`, out of the
           # image's own copy, not this checkout's.
-          source: ".deploy-rendered/docker-compose.yml,.deploy-rendered/.env"
-          target: ${{ env.VPS_APP_DIR }}
-          strip_components: 1
-
-      - name: Copy nginx config to VPS
-        if: steps.check.outputs.configured == 'true'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          port: ${{ vars.VPS_PORT || '22' }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          source: "deploy/nginx/"
+          source: ".deploy-rendered/docker-compose.yml"
           target: ${{ env.VPS_APP_DIR }}
           strip_components: 1
 
