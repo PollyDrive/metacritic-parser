@@ -31,11 +31,14 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:${APP_HOST_PORT:-8089}:8080"
-    env_file:
-      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
       APP_PORT: 8080
+      MONITORING_USERNAME: ${MONITORING_USERNAME}
+      MONITORING_PASSWORD: ${MONITORING_PASSWORD}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
     volumes:
       - ./logs:/app/logs
       - .:/app
@@ -51,10 +54,13 @@ services:
     depends_on:
       db:
         condition: service_started
-    env_file:
-      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
+      MONITORING_USERNAME: ${MONITORING_USERNAME}
+      MONITORING_PASSWORD: ${MONITORING_PASSWORD}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
     volumes:
       - ./logs:/app/logs
       - .:/app
