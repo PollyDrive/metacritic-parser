@@ -34,7 +34,7 @@ async def list_games(
     page: int = Query(default=1, ge=1),
     use_case=Depends(get_catalog_use_case),
 ):
-    paginated = await use_case.list_games(platform=platform, q=q, sort=sort, page=page, page_size=24)
+    paginated = await use_case.list_games(platform=platform, q=q, sort=sort, page=page, page_size=20)
     platforms = await use_case.list_platforms()
     return request.app.state.templates.TemplateResponse(
         request,

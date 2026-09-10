@@ -36,4 +36,4 @@ def test_sort_rating_query_param_is_passed_through_to_the_use_case(client):
     response = test_client.get("/games", params={"sort": "rating"})
 
     assert response.status_code == 200
-    use_case.list_games.assert_awaited_once_with(platform=None, q=None, sort="rating", page=1, page_size=24)
+    use_case.list_games.assert_awaited_once_with(platform=None, q=None, sort="rating", page=1, page_size=20)

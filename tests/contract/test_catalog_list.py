@@ -51,6 +51,16 @@ def test_get_games_with_no_catalog_renders_empty_state_not_an_error(client):
     assert response.status_code == 200
 
 
+def test_get_games_requests_a_page_size_of_20(client):
+    test_client, use_case = client
+
+    test_client.get("/games")
+
+    use_case.list_games.assert_awaited_once_with(
+        platform=None, q=None, sort="rating", page=1, page_size=20
+    )
+
+
 def test_a_non_positive_page_is_rejected_with_422_not_a_crash(client):
     """A negative page produces a negative SQL OFFSET, which Postgres rejects
     with an unhandled exception (500) instead of a clean validation error."""
