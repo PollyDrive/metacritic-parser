@@ -143,6 +143,12 @@ jobs:
           Path(".deploy-rendered/docker-compose.yml").write_text(content)
           print(f"Rendered: image={image}, app={app_port}, db={db_port}")
           PY
+
+          echo "--- .deploy-rendered/docker-compose.yml app: image line ---"
+          grep -A1 '^  app:' .deploy-rendered/docker-compose.yml | grep 'image:'
+          echo "--- md5 ---"
+          md5sum .deploy-rendered/docker-compose.yml
+
           # Passed to the SSH step as an env var, not scp'd — scp+mv for this
           # one file kept landing the OLD unrendered docker-compose.yml on
           # the VPS across several fix attempts (strip_components tuning,
@@ -198,7 +204,12 @@ jobs:
               echo "ERROR: RENDERED_COMPOSE_B64 was empty!" >&2
               exit 1
             fi
+            echo "RENDERED_COMPOSE_B64 length: ${#RENDERED_COMPOSE_B64}"
             echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
+            echo "--- docker-compose.yml app: image line right after write ---"
+            grep -A1 '^  app:' docker-compose.yml | grep 'image:'
+            echo "--- md5 ---"
+            md5sum docker-compose.yml
             rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
