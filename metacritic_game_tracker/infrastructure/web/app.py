@@ -50,4 +50,9 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router)
     app.include_router(monitoring_router)
     app.include_router(config_router)
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok"}
+
     return app

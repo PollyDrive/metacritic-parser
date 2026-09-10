@@ -26,9 +26,6 @@ logging.basicConfig(
         logging.FileHandler(LOGS_DIR / "app.log"),
     ],
 )
-# httpx logs the full request URL (including query string) at INFO — see
-# scripts/run_scheduler.py for why this must not log secrets in plaintext.
-logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 app = create_app()
@@ -43,5 +40,6 @@ app.dependency_overrides[get_catalog_use_case] = _catalog_use_case_dependency
 
 
 if __name__ == "__main__":
-    log.info("metacritic-game-tracker web tier starting")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    _port = int(os.environ.get("APP_PORT", "8080"))
+    log.info("metacritic-game-tracker web tier starting on port %d", _port)
+    uvicorn.run("main:app", host="0.0.0.0", port=_port)

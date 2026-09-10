@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from dotenv import dotenv_values
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from metacritic_game_tracker.domain.models import PlatformScore
 from metacritic_game_tracker.infrastructure.db.repositories import GameRepository
 from metacritic_game_tracker.infrastructure.scraper.parser import ParsedGame
-
-import pytest
 
 # dotenv_values(), not load_dotenv() — reads .env into a local dict instead of
 # mutating the process environment, so this file doesn't leak DATABASE_URL/
