@@ -40,7 +40,7 @@ def test_game_detail_includes_a_similar_games_section_linking_to_each_similar_ga
 
     assert response.status_code == 200
     assert "Hades" in response.text
-    assert '/games/2"' in response.text
+    assert '/games/hades"' in response.text
 
 
 def test_game_detail_omits_the_similar_games_section_when_there_are_none(client):

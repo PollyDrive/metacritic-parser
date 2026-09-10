@@ -47,21 +47,21 @@ async def test_get_game_detail_returns_the_game_and_similar_games():
     game = _game(1)
     similar = [_game(2, "Hades II")]
     repo = MagicMock()
-    repo.get_by_id = AsyncMock(return_value=game)
+    repo.get_by_slug = AsyncMock(return_value=game)
     repo.get_similar_games = AsyncMock(return_value=similar)
     use_case = CatalogUseCase(repo)
 
-    result = await use_case.get_game_detail(1)
+    result = await use_case.get_game_detail(str(game.id))
 
     assert result.game is game
     assert result.similar_games == similar
 
 
-async def test_get_game_detail_returns_none_for_an_unknown_id():
+async def test_get_game_detail_returns_none_for_an_unknown_slug():
     repo = MagicMock()
-    repo.get_by_id = AsyncMock(return_value=None)
+    repo.get_by_slug = AsyncMock(return_value=None)
     use_case = CatalogUseCase(repo)
 
-    result = await use_case.get_game_detail(999)
+    result = await use_case.get_game_detail("unknown-slug")
 
     assert result is None

@@ -94,8 +94,8 @@ def test_run_history_row_carries_its_own_events_for_the_accordion(app):
     assert "Elden Ring" in body
     assert "critic" in body
     assert "+5" in body
-    # links into the catalog must use the real detail route, not the slug-based one
-    assert "/games/9" in body
+    # links into the catalog must use the slug-based route
+    assert "/games/elden-ring" in body
     assert "/game/elden-ring" not in body
 
 
