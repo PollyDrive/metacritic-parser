@@ -133,6 +133,31 @@ main.page {
   padding: 1.5rem 1.25rem 3rem;
 }
 
+.site-header {
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-header-nav {
+  display: flex;
+  gap: 1.5rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.site-header-nav a {
+  color: var(--text-dim);
+}
+
+.site-header-nav a:hover,
+.site-header-nav a.active {
+  color: var(--accent);
+}
+
 nav.crumb {
   max-width: var(--max-width);
   margin: 0 auto;

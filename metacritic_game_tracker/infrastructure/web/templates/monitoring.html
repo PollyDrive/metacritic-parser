@@ -7,7 +7,14 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <nav class="crumb"><a href="/">&larr; Home</a> &middot; <a href="/monitoring/config">Settings</a></nav>
+  <header class="site-header">
+    <div style="font-weight: 800; color: var(--accent);">MGT</div>
+    <nav class="site-header-nav">
+      <a href="/games">Catalog</a>
+      <a href="/monitoring" class="active">Monitoring</a>
+      <a href="/monitoring/config">Settings</a>
+    </nav>
+  </header>
 
   <main class="page">
     <div class="page-header-row">
@@ -28,7 +35,13 @@
       <div class="pipeline-card" data-kind="{{ p.kind }}">
         <div class="pipeline-card-head">
           <h3>{{ {"ingest": "Ingest", "review_refresh": "Review Refresh", "playthrough": "Playthrough"}[p.kind] }}</h3>
-          <span class="pipeline-badge status-{{ p.latest.status if p.latest else 'idle' }}">{{ p.latest.status if p.latest else "never run" }}</span>
+          <span class="pipeline-badge status-{{ p.latest.status if p.latest else 'idle' }}">
+            {% if p.latest and p.latest.status == "running" and p.latest.current_item %}
+              Running… {{ p.latest.current_item }}
+            {% else %}
+              {{ p.latest.status if p.latest else "never run" }}
+            {% endif %}
+          </span>
         </div>
         {% if p.latest %}
         <p class="pipeline-meta">Started {{ p.latest.started_at }}{% if p.latest.finished_at %}<br>Finished {{ p.latest.finished_at }}{% endif %}</p>
@@ -40,7 +53,6 @@
         <p class="pipeline-meta">Coverage: {{ p.coverage.covered }}/{{ p.coverage.total }} games have a playthrough</p>
         {% endif %}
         <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
-        <p class="run-status"{% if not (p.latest and p.latest.status == "running" and p.latest.current_item) %} hidden{% endif %}>{% if p.latest and p.latest.status == "running" and p.latest.current_item %}Running… {{ p.latest.current_item }}{% endif %}</p>
       </div>
       {% endfor %}
     </div>
@@ -208,28 +220,27 @@
     function showStatus(kind, text, level) {
       const card = cardFor(kind);
       if (!card) return;
-      const el = card.querySelector(".run-status");
-      el.hidden = false;
+      const el = card.querySelector(".pipeline-badge");
       el.textContent = text;
-      el.className = "run-status " + (level || "");
+      el.className = "pipeline-badge status-" + (level || "idle");
     }
 
     document.querySelectorAll(".run-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const kind = btn.dataset.kind;
         btn.disabled = true;
-        showStatus(kind, "Queuing run…", "pending");
+        showStatus(kind, "Queuing run…", "running");
         try {
           const res = await fetch("/monitoring/run?kind=" + encodeURIComponent(kind), { method: "POST" });
           if (res.status === 202) {
-            showStatus(kind, "Queued — waiting for the worker to pick it up…", "pending");
+            showStatus(kind, "Queued — waiting...", "running");
           } else {
             const body = await res.json().catch(() => ({}));
-            showStatus(kind, body.detail || "Could not start a run.", "error");
+            showStatus(kind, body.detail || "Could not start a run.", "failed");
             btn.disabled = false;
           }
         } catch (err) {
-          showStatus(kind, "Request failed — check your connection.", "error");
+          showStatus(kind, "Request failed", "failed");
           btn.disabled = false;
         }
       });
@@ -240,19 +251,13 @@
       const btn = document.querySelector('.run-btn[data-kind="' + run.stage + '"]');
       if (run.status === "running") {
         if (btn) btn.disabled = true;
-        showStatus(run.stage, run.current_item ? "Running… " + run.current_item : "Running…", "pending");
+        showStatus(run.stage, run.current_item ? "Running… " + run.current_item : "Running…", "running");
       } else if (run.status === "completed" || run.status === "failed") {
-        // The stream re-announces every stage's current state on each new
-        // connection (not just deltas), so a page that loads onto an
-        // already-finished run sees a "completed" event too. Only reload if
-        // this tab itself watched the run go running -> done (btn disabled) —
-        // otherwise every reload reopens the stream and re-triggers this
-        // branch forever.
         if (btn && btn.disabled) {
           showStatus(
             run.stage,
             run.status === "completed" ? "Completed — refreshing…" : "Run failed — refreshing…",
-            run.status === "completed" ? "success" : "error"
+            run.status === "completed" ? "completed" : "failed"
           );
           setTimeout(() => window.location.reload(), 800);
         }
