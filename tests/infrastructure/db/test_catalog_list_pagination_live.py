@@ -14,13 +14,12 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 
+import pytest
 from dotenv import dotenv_values
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from metacritic_game_tracker.infrastructure.db.models import GameORM, PlatformScoreORM
 from metacritic_game_tracker.infrastructure.db.repositories import GameRepository
-
-import pytest
 
 _DATABASE_URL = os.environ.get("DATABASE_URL") or dotenv_values().get("DATABASE_URL")
 
