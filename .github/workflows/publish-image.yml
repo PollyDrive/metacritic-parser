@@ -3,7 +3,6 @@ name: Publish Docker Image
 on:
   push:
     branches:
-      - main
       - preprod
   workflow_dispatch:
 
@@ -118,8 +117,8 @@ jobs:
           from pathlib import Path
 
           image = os.getenv("APP_IMAGE", "ghcr.io/krvtzz/metacritic-game-tracker:latest")
-          app_port = os.getenv("APP_HOST_PORT", "8089")
-          db_port = os.getenv("DB_HOST_PORT", "5440")
+          app_port = os.getenv("APP_HOST_PORT", "8089").replace("127.0.0.1:", "")
+          db_port = os.getenv("DB_HOST_PORT", "5440").replace("127.0.0.1:", "")
 
           content = Path("docker-compose.yml").read_text()
 
@@ -133,12 +132,8 @@ jobs:
           content = re.sub(r'^\s*build:\s*\.\s*\n', '', content, flags=re.MULTILINE)
           # Убираем .:/app volume — на VPS только ./logs нужен
           content = re.sub(r'^\s*-\s*\.:/app\s*\n', '', content, flags=re.MULTILINE)
-          # Порты: только на 127.0.0.1 (nginx реверс-прокси). App-порт в
-          # docker-compose.yml уже жёстко привязан к 127.0.0.1 в самой
-          # строке — тут просто подставляем номер порта, а не добавляем
-          # префикс повторно (иначе получаем невалидный
-          # "127.0.0.1:127.0.0.1:8089:8080"). DB-порт такого префикса в
-          # исходнике не имеет — добавляем его здесь.
+          # Порты: только на 127.0.0.1 (nginx реверс-прокси)
+          # В docker-compose.yml APP_HOST_PORT уже имеет префикс 127.0.0.1:, поэтому не дублируем его
           content = re.sub(r'\$\{APP_HOST_PORT:-\d+\}', app_port, content)
           content = re.sub(r'\$\{DB_HOST_PORT:-\d+\}', f'127.0.0.1:{db_port}', content)
           # Фоллбэк для хардкоженных значений
@@ -171,41 +166,6 @@ jobs:
           APP_HOST_PORT: ${{ env.APP_HOST_PORT }}
           DB_HOST_PORT: ${{ env.DB_HOST_PORT }}
 
-      - name: Render .env for VPS
-        if: steps.check.outputs.configured == 'true'
-        id: render_env
-        run: |
-          # Same env-var-pipe pattern as docker-compose.yml above, for the
-          # same reason: no scp, no intermediate file on the VPS to land
-          # wrong. This step existed before, got dropped along with the
-          # nginx scp step, and nothing replaced it — MONITORING_USERNAME/
-          # PASSWORD (and everything else here) stopped reaching the VPS
-          # entirely, silently, since docker compose just keeps whatever
-          # .env was already there rather than erroring on a missing one.
-          cat > /tmp/deploy.env <<'ENVEOF'
-          POSTGRES_DB=${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
-          POSTGRES_USER=${{ secrets.POSTGRES_USER || 'postgres' }}
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          DATABASE_URL=postgresql+asyncpg://${{ secrets.POSTGRES_USER || 'postgres' }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB || 'metacritic_game_tracker_db' }}
-          OPENCODE_BASE_URL=${{ secrets.OPENCODE_BASE_URL }}
-          OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }}
-          YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
-          MONITORING_USERNAME=${{ secrets.MONITORING_USERNAME }}
-          MONITORING_PASSWORD=${{ secrets.MONITORING_PASSWORD }}
-          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-          ALERT_EMAIL_TO=${{ secrets.ALERT_EMAIL_TO }}
-          APP_ENV=prod
-          LOGS_DIR=logs
-          APP_PORT=8080
-          ENVEOF
-          {
-            echo 'content_b64<<ENV_EOF'
-            base64 -w0 /tmp/deploy.env
-            echo
-            echo 'ENV_EOF'
-          } >> "$GITHUB_OUTPUT"
-          rm -f /tmp/deploy.env
-
       - name: Deploy on VPS
         if: steps.check.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.0
@@ -213,13 +173,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           RENDERED_COMPOSE_B64: ${{ steps.render.outputs.content_b64 }}
-          RENDERED_ENV_B64: ${{ steps.render_env.outputs.content_b64 }}
+          MONITORING_USERNAME: ${{ secrets.MONITORING_USERNAME || vars.MONITORING_USERNAME }}
+          MONITORING_PASSWORD: ${{ secrets.MONITORING_PASSWORD || vars.MONITORING_PASSWORD }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY || vars.YOUTUBE_API_KEY }}
+          OPENCODE_BASE_URL: ${{ secrets.OPENCODE_BASE_URL || vars.OPENCODE_BASE_URL }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || vars.OPENCODE_API_KEY }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER || vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || vars.POSTGRES_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ vars.VPS_PORT || '22' }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64,RENDERED_ENV_B64
+          envs: VPS_APP_DIR,GH_TOKEN,GH_ACTOR,RENDERED_COMPOSE_B64,MONITORING_USERNAME,MONITORING_PASSWORD,YOUTUBE_API_KEY,OPENCODE_BASE_URL,OPENCODE_API_KEY,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD
           script: |
             set -e
             APP_DIR="${VPS_APP_DIR:-~/metacritic-game-tracker}"
@@ -230,20 +197,13 @@ jobs:
 
             cd "$APP_DIR"
 
-            # Written directly from env vars, not scp'd + moved — see the
+            # Written directly from the env var, not scp'd + moved — see the
             # render step's comment for why.
             if [ -z "$RENDERED_COMPOSE_B64" ]; then
               echo "ERROR: RENDERED_COMPOSE_B64 was empty!" >&2
               exit 1
             fi
             echo "$RENDERED_COMPOSE_B64" | base64 -d > docker-compose.yml
-
-            if [ -z "$RENDERED_ENV_B64" ]; then
-              echo "ERROR: RENDERED_ENV_B64 was empty!" >&2
-              exit 1
-            fi
-            echo "$RENDERED_ENV_B64" | base64 -d > .env
-            chmod 600 .env
             rm -rf .deploy-rendered
 
             # Clean stray files from past deploys (e.g. migrate.py/
@@ -262,6 +222,10 @@ jobs:
 
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d --force-recreate
+
+            echo "=== DEBUG: CONTAINER ENVIRONMENT ==="
+            docker compose -f docker-compose.yml exec -T app env | grep -E 'MONITORING|YOUTUBE|OPENCODE|POSTGRES' || true
+            echo "===================================="
 
             # Ждём готовности DB: pg_isready в цикле (до 90 секунд).
             # sleep 10 не хватает при первом запуске — postgres инициализирует
@@ -286,20 +250,6 @@ jobs:
             docker compose -f docker-compose.yml exec -T app \
               python scripts/migrate.py
 
-            # Truncate, don't delete: docker-compose.yml's env_file: .env
-            # must still exist on disk for ANY future `docker compose`
-            # invocation (exec, ps, logs — not just create/up) to even load
-            # the config, regardless of whether that command needs the
-            # values — an already-running container already has them baked
-            # into its own process env from creation time, it doesn't
-            # re-read this file. Deleting the file outright (tried first)
-            # made every subsequent `docker compose exec` on this deploy
-            # fail immediately with "env file .env not found", and would
-            # have broken manual debugging (`docker compose exec app ...`)
-            # indefinitely until the next deploy recreated it. An empty
-            # file satisfies the existence check without any real secret
-            # sitting on disk between deploys.
-            : > .env
-
+            
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             docker image prune -f

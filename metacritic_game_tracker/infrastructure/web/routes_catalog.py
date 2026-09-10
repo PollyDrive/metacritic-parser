@@ -4,7 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-router = APIRouter()
+from metacritic_game_tracker.infrastructure.web.auth import require_operator
+
+router = APIRouter(dependencies=[Depends(require_operator)])
 
 
 async def get_catalog_use_case():
