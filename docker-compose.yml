@@ -30,12 +30,12 @@ services:
       db:
         condition: service_started
     ports:
-      - "${APP_HOST_PORT:-8001}:${APP_PORT:-8000}"
+      - "127.0.0.1:${APP_HOST_PORT:-8089}:8080"
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
-      APP_PORT: ${APP_PORT:-8000}
+      APP_PORT: 8080
     volumes:
       - ./logs:/app/logs
       - .:/app
