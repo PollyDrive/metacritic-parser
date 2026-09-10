@@ -233,12 +233,23 @@ async def monitoring_status(
     )
     activity_feed = activity_result.scalars().all()
 
+    activity_by_game = {}
+    ordered_activity_groups = []
+    for event in activity_feed:
+        if event.game_id not in activity_by_game:
+            activity_by_game[event.game_id] = []
+            ordered_activity_groups.append({
+                "game": event.game,
+                "events": activity_by_game[event.game_id]
+            })
+        activity_by_game[event.game_id].append(event)
+
     return request.app.state.templates.TemplateResponse(
         request, "monitoring.html", {
             "runs": runs,
             "pipelines": pipelines,
             "error_log": error_log,
-            "activity_feed": activity_feed
+            "activity_groups": ordered_activity_groups
         }
     )
 

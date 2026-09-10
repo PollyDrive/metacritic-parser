@@ -149,28 +149,49 @@
       <div class="table-scroll">
         <table class="ops">
           <thead>
-            <tr><th>Timestamp</th><th>Pipeline</th><th>Event</th><th>Target Item</th><th>Details</th></tr>
+            <tr><th></th><th>Game</th><th colspan="3">Activity Summary</th></tr>
           </thead>
           <tbody>
-            {% for event in activity_feed %}
-            <tr>
-              <td style="white-space: nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</td>
-              <td><span class="pipeline-badge">{{ event.run.stage if event.run else "unknown" }}</span></td>
-              <td>{{ event.event_type }}</td>
-              <td><a href="/games/{{ event.game.metacritic_slug }}">{{ event.game.title }}</a></td>
-              <td>
-                {% if event.details %}
-                  {% if event.event_type == "review_refresh" %}
-                    {{ event.details.audience }} reviews &mdash;
-                    first pass {{ event.details.get("first_pass_reviews", "?") }} &middot;
-                    new {{ event.details.delta }} &middot;
-                    total {{ event.details.reviews_found }}
-                  {% elif event.event_type == "playthrough_generated" %}
-                    <a href="{{ event.details.video_url }}" target="_blank">View Video</a>
-                  {% else %}
-                    {{ event.details.source }}
-                  {% endif %}
-                {% endif %}
+            {% for group in activity_groups %}
+            <tr class="run-row--expandable" data-run-toggle="activity-game-{{ group.game.id }}">
+              <td class="run-expand-cell">
+                <button type="button" class="run-expand-btn" aria-expanded="false">&rsaquo;</button>
+              </td>
+              <td><strong><a href="/games/{{ group.game.metacritic_slug }}">{{ group.game.title }}</a></strong></td>
+              <td colspan="3" style="color: var(--text-dim); font-size: 0.85rem;">
+                {{ group.events|length }} event(s) &middot; Latest: {{ group.events[0].created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}
+              </td>
+            </tr>
+            <tr id="activity-game-{{ group.game.id }}" class="run-events-row" hidden>
+              <td colspan="5">
+                <table class="ops ops--nested">
+                  <thead>
+                    <tr><th>Time</th><th>Pipeline</th><th>Event</th><th>Details</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for event in group.events %}
+                    <tr>
+                      <td style="white-space: nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+                      <td><span class="pipeline-badge">{{ event.run.stage if event.run else "unknown" }}</span></td>
+                      <td>{{ event.event_type }}</td>
+                      <td>
+                        {% if event.details %}
+                          {% if event.event_type == "review_refresh" %}
+                            {{ event.details.audience }} reviews &mdash;
+                            first pass {{ event.details.get("first_pass_reviews", "?") }} &middot;
+                            new {{ event.details.delta }} &middot;
+                            total {{ event.details.reviews_found }}
+                          {% elif event.event_type == "playthrough_generated" %}
+                            <a href="{{ event.details.video_url }}" target="_blank">View Video</a>
+                          {% else %}
+                            {{ event.details.source }}
+                          {% endif %}
+                        {% endif %}
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
               </td>
             </tr>
             {% else %}
