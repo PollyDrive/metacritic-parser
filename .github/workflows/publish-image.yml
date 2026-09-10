@@ -204,16 +204,13 @@ jobs:
               chmod 600 "$APP_DIR/.env"
             fi
 
-            # Podman rootless
-            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-            export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
 
-            echo "$GH_TOKEN" | podman login ghcr.io -u "$GH_ACTOR" --password-stdin
+            echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
             cd "$APP_DIR"
 
-            podman compose -f docker-compose.yml pull
-            podman compose -f docker-compose.yml up -d --force-recreate
+            docker compose -f docker-compose.yml pull
+            docker compose -f docker-compose.yml up -d --force-recreate
 
             # Ждём готовности DB: pg_isready в цикле (до 90 секунд).
             # sleep 10 не хватает при первом запуске — postgres инициализирует
@@ -221,7 +218,7 @@ jobs:
             DB_USER="${POSTGRES_USER:-postgres}"
             DB_READY=0
             for i in $(seq 1 45); do
-              if podman compose -f docker-compose.yml exec -T db \
+              if docker compose -f docker-compose.yml exec -T db \
                    pg_isready -U "$DB_USER" -q 2>/dev/null; then
                 DB_READY=1
                 echo "DB ready after $((i * 2))s"
@@ -235,7 +232,7 @@ jobs:
             fi
 
             # Миграции: idempotent, безопасно при повторных запусках
-            podman compose -f docker-compose.yml exec -T app \
+            docker compose -f docker-compose.yml exec -T app \
               python scripts/migrate.py
 
             # nginx: кладём конфиг и перезагружаем
@@ -247,5 +244,5 @@ jobs:
               sudo nginx -t && sudo nginx -s reload
             fi
 
-            podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-            podman image prune -f
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            docker image prune -f
