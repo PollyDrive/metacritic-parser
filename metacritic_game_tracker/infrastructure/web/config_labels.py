@@ -1,109 +1,120 @@
-"""Russian labels and explanations for the settings page (contracts/web-ui.md,
+"""English labels and explanations for the settings page (contracts/web-ui.md,
 US5) — the `runtime_config` seed rows themselves stay in English (the
 canonical, technical description column); this is presentation-only
 translation for the operator console, keyed by `runtime_config.key`."""
 from __future__ import annotations
 
-RU_LABELS: dict[str, str] = {
-    "ingest.enabled": "Плановая загрузка включена",
-    "ingest.runs_per_hour": "Запусков в час",
-    "ingest.games_per_run": "Игр за один запуск",
-    "ingest.active_hours_start": "Начало окна активности",
-    "ingest.active_hours_end": "Конец окна активности",
-    "ingest.timezone": "Часовой пояс (граница суток)",
-    "scraper.request_delay_seconds": "Задержка между запросами, сек",
-    "scraper.max_retries": "Повторных попыток при сбое",
-    "scraper.timeout_seconds": "Таймаут запроса, сек",
-    "reviews.critic_sample_size": "Отзывов критиков для резюме",
-    "reviews.user_sample_size": "Отзывов игроков для резюме",
-    "enrichment.playthrough_enabled": "Летсплей-заключения включены",
-    "enrichment.youtube_daily_search_budget": "Дневной бюджет запросов YouTube",
-    "backfill.max_attempts": "Попыток перед отказом",
-    "backfill.backoff_base_minutes": "База экспоненциальной задержки, мин",
-    "dq.max_reject_ratio": "Порог отбраковки для остановки прогона",
+EN_LABELS: dict[str, str] = {
+    "ingest.enabled": "Scheduled ingestion enabled",
+    "ingest.runs_per_hour": "Runs per hour",
+    "ingest.games_per_run": "Games per run",
+    "ingest.active_hours_start": "Active window start",
+    "ingest.active_hours_end": "Active window end",
+    "ingest.timezone": "Timezone (day boundary)",
+    "review_refresh.interval_hours": "Review refresh cadence, hours",
+    "playthrough.interval_hours": "Playthrough cadence, hours",
+    "scraper.request_delay_seconds": "Delay between requests, sec",
+    "scraper.max_retries": "Max retries on failure",
+    "scraper.timeout_seconds": "Request timeout, sec",
+    "reviews.critic_sample_size": "Critic reviews for summary",
+    "reviews.user_sample_size": "User reviews for summary",
+    "enrichment.playthrough_enabled": "Enable YouTube playthrough search",
+    "enrichment.youtube_daily_search_budget": "Daily YouTube search quota (1 search = 100 units)",
+    "backfill.max_attempts": "Attempts before abandoning",
+    "backfill.backoff_base_minutes": "Exponential backoff base, min",
+    "dq.max_reject_ratio": "Rejection threshold to stop run",
 }
 
-# "Зачем нужна настройка" — на один-два предложения длиннее RU_LABELS,
-# объясняет практическое последствие изменения значения, а не просто
-# повторяет название.
-RU_WHY: dict[str, str] = {
+# Explanations of why the setting is needed — one or two sentences longer than EN_LABELS,
+# explaining the practical consequence of changing the value rather than just
+# repeating the name.
+EN_WHY: dict[str, str] = {
     "ingest.enabled": (
-        "Общий выключатель плановой загрузки новых игр. Выключите, чтобы "
-        "полностью остановить обход Metacritic (например, на обслуживание), "
-        "не трогая остальные настройки — воркер продолжит работать, но "
-        "пропускать плановые прогоны."
+        "Master switch for scheduled ingestion of new games. Turn off to "
+        "completely stop scraping Metacritic (e.g., for maintenance), "
+        "without affecting other settings — the worker will continue running, but "
+        "skip scheduled runs."
     ),
     "ingest.runs_per_hour": (
-        "Как часто воркер проверяет Metacritic на новые игры. Больше — "
-        "каталог свежее, но выше нагрузка на источник и на LLM-бюджет."
+        "How often the worker checks Metacritic for new games. Higher means "
+        "a fresher catalog, but increases load on the source and LLM budget."
     ),
     "ingest.games_per_run": (
-        "Сколько игр обрабатывается за один прогон. Ограничивает разовую "
-        "нагрузку на скрапер и стоимость LLM-вызовов за один запуск."
+        "How many games are processed per run. Limits the batch "
+        "load on the scraper and LLM API costs per execution."
     ),
     "ingest.active_hours_start": (
-        "Начало окна, в которое разрешён плановый запуск загрузки. Вне "
-        "этого окна воркер тикает, но не запускает ингест."
+        "Start of the window when scheduled ingestion is allowed. Outside "
+        "this window, the worker ticks but does not start ingestion."
     ),
     "ingest.active_hours_end": (
-        "Конец окна активности плановой загрузки — см. «Начало окна "
-        "активности»."
+        "End of the active window for scheduled ingestion — see 'Active "
+        "window start'."
     ),
     "ingest.timezone": (
-        "Часовой пояс, по которому определяется граница суток — влияет на "
-        "счётчик «игр за день» и на окно активных часов выше."
+        "Timezone used to determine the day boundary — affects the "
+        "'games per day' counter and the active hours window above."
+    ),
+    "review_refresh.interval_hours": (
+        "How often the review-refresh backfill pass runs, independent of the "
+        "ingest tick. Decayed TTL refreshes are only due every 3-7 days, so "
+        "running this every hour (the old behavior) just produced empty runs."
+    ),
+    "playthrough.interval_hours": (
+        "How often the playthrough backfill pass runs, independent of the "
+        "ingest tick. The daily YouTube search budget is usually spent in one "
+        "burst, so running this every hour (the old behavior) just produced "
+        "empty runs once the budget was gone."
     ),
     "scraper.request_delay_seconds": (
-        "Пауза между запросами к Metacritic. Снижает риск блокировки по IP "
-        "за слишком частые обращения — не ставьте 0."
+        "Pause between requests to Metacritic. Reduces the risk of IP blocks "
+        "for too frequent access — do not set to 0."
     ),
     "scraper.max_retries": (
-        "Сколько раз повторить запрос при сетевой ошибке, прежде чем "
-        "считать страницу недоступной и отбраковать её."
+        "How many times to retry a request on network error before "
+        "considering the page unavailable and rejecting it."
     ),
     "scraper.timeout_seconds": (
-        "Сколько ждать ответ от Metacritic на один запрос, прежде чем "
-        "считать его зависшим и повторить попытку."
+        "How long to wait for a response from Metacritic per request before "
+        "considering it timed out and retrying."
     ),
     "reviews.critic_sample_size": (
-        "Сколько отзывов критиков передаётся в LLM для резюме. Больше "
-        "выборка — точнее резюме, но дороже и медленнее вызов."
+        "How many critic reviews are passed to the LLM for summarization. Capped "
+        "at 10 — Metacritic's own review page never embeds more than 10 reviews "
+        "per request, and paging (?page=N) is ignored, so a higher value here "
+        "would never actually be reached."
     ),
     "reviews.user_sample_size": (
-        "То же самое, но для отзывов игроков — см. «Отзывов критиков для "
-        "резюме»."
+        "Same as above, but for user reviews — see 'Critic reviews for summary'."
     ),
     "enrichment.playthrough_enabled": (
-        "Включает поиск летсплеев на YouTube и генерацию заключения по ним "
-        "для карточек игр. Требует настроенный YOUTUBE_API_KEY в .env — без "
-        "него прогон пайплайна летсплеев просто не будет запускаться."
+        "Enables searching for playthroughs on YouTube and generating a takeaway "
+        "for game cards. Requires a configured YOUTUBE_API_KEY in .env — without "
+        "it, the playthrough pipeline will not run at all."
     ),
     "enrichment.youtube_daily_search_budget": (
-        "Дневной лимит «единиц» YouTube Data API на поиск летсплеев (поиск "
-        "стоит 100 единиц за запрос). Защищает бесплатную квоту Google от "
-        "исчерпания в течение дня."
+        "Daily limit of YouTube Data API 'units' for playthrough searches (a search "
+        "costs 100 units per request). Protects the free Google quota from "
+        "exhaustion during the day."
     ),
     "backfill.max_attempts": (
-        "Сколько раз повторить попытку обогащения (резюме отзывов или "
-        "летсплей) при сбое, прежде чем окончательно отказаться от игры до "
-        "ручного вмешательства."
+        "How many times to retry an enrichment attempt (review summary or "
+        "playthrough) on failure before finally abandoning the game until "
+        "manual intervention."
     ),
     "backfill.backoff_base_minutes": (
-        "Базовая задержка перед повторной попыткой после сбоя обогащения — "
-        "растёт экспоненциально с каждой следующей неудачной попыткой."
+        "Base delay before retrying after an enrichment failure — "
+        "grows exponentially with each subsequent failed attempt."
     ),
     "dq.max_reject_ratio": (
-        "Доля отбракованных записей в одном прогоне ингеста, при "
-        "превышении которой прогон прерывается целиком, не трогая курсор "
-        "пагинации — защита от массового сбоя парсера на изменившейся "
-        "разметке."
+        "The ratio of rejected records in a single ingestion run that, "
+        "when exceeded, aborts the entire run without advancing the pagination "
+        "cursor — protection against mass scraper failure due to layout changes."
     ),
 }
 
-
 def label_for(key: str) -> str:
-    return RU_LABELS.get(key, key)
-
+    return EN_LABELS.get(key, key)
 
 def why_for(key: str) -> str:
-    return RU_WHY.get(key, "")
+    return EN_WHY.get(key, "")

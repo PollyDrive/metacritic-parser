@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from metacritic_game_tracker.infrastructure.web.config_labels import (
-    RU_LABELS,
-    RU_WHY,
+    EN_LABELS,
+    EN_WHY,
     label_for,
     why_for,
 )
 
-# Mirrors the seeded keys in sql/migrations/005_runtime_config.sql — every
-# operator-tunable key must have a Russian label, or the settings page falls
-# back to the raw technical key for it.
+# Mirrors the seeded keys in sql/migrations/005_runtime_config.sql
 SEEDED_KEYS = [
     "ingest.enabled",
     "ingest.runs_per_hour",
@@ -30,8 +28,8 @@ SEEDED_KEYS = [
 ]
 
 
-def test_every_seeded_config_key_has_a_russian_label():
-    missing = [key for key in SEEDED_KEYS if key not in RU_LABELS]
+def test_every_seeded_config_key_has_an_english_label():
+    missing = [key for key in SEEDED_KEYS if key not in EN_LABELS]
     assert missing == []
 
 
@@ -39,12 +37,12 @@ def test_label_for_falls_back_to_the_raw_key_when_untranslated():
     assert label_for("some.unknown.key") == "some.unknown.key"
 
 
-def test_label_for_returns_the_russian_label_when_known():
-    assert label_for("ingest.games_per_run") == "Игр за один запуск"
+def test_label_for_returns_the_english_label_when_known():
+    assert label_for("ingest.games_per_run") == "Games per run"
 
 
 def test_every_seeded_config_key_has_a_why_explanation():
-    missing = [key for key in SEEDED_KEYS if key not in RU_WHY]
+    missing = [key for key in SEEDED_KEYS if key not in EN_WHY]
     assert missing == []
 
 

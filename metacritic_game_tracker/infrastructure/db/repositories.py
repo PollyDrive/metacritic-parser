@@ -56,6 +56,14 @@ class GameRepository:
             if row is None:
                 row = PlatformScoreORM(game_id=game.id, platform=p.platform)
                 self._session.add(row)
+                # `platform_scores` is lazy="selectin" — eagerly loaded once
+                # when the game was fetched, then cached. session.add() alone
+                # never updates that already-cached Python-side list, so any
+                # code reading game.platform_scores right after this call
+                # (e.g. review-refresh's per-platform sampling) would see it
+                # as empty for a brand-new game even though the row was just
+                # written.
+                game.platform_scores.append(row)
             row.metascore = p.metascore
             row.userscore = p.userscore
             row.updated_at = now
@@ -90,7 +98,7 @@ class GameRepository:
             )
         else:
             stmt = stmt.order_by(GameORM.id.desc())
-            
+
         stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())

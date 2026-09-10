@@ -131,6 +131,16 @@ class ReviewSummaryORM(Base):
     summary_text: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime]
     llm_call_id: Mapped[int | None] = mapped_column(ForeignKey("llm_calls.id", ondelete="SET NULL"))
+    # What this summary actually reflects: the true review count on
+    # Metacritic when it was generated (not the SSR page's fixed 10-cap),
+    # how many of those were sampled for the LLM, and where to see the rest.
+    total_reviews_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    sampled_reviews_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    # Which of the game's platforms this summary was actually sampled from —
+    # reviews are split per platform on Metacritic, so this is the one with
+    # the most reviews for this audience as of the last regeneration.
+    source_platform: Mapped[str | None] = mapped_column(Text)
 
 
 class IngestStateORM(Base):
@@ -142,6 +152,21 @@ class IngestStateORM(Base):
     day_new_releases_done: Mapped[bool] = mapped_column(nullable=False, default=False)
     see_all_next_page: Mapped[int] = mapped_column(nullable=False, default=1)
     updated_at: Mapped[datetime]
+
+
+class GameActivityEventORM(Base):
+    __tablename__ = "game_activity_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("pipeline_runs.id", ondelete="SET NULL"))
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime]
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    game: Mapped[GameORM] = relationship(lazy="selectin")
+    run: Mapped[PipelineRunORM | None] = relationship(lazy="selectin")
+
 
 
 class EnrichmentAttemptORM(Base):

@@ -11,11 +11,30 @@ from metacritic_game_tracker.infrastructure.scraper.parser import ParsedGame
 _GAME_HTML = "<html>game</html>"
 
 
-def _config(games_per_run=20, max_reject_ratio=0.25, critic_n=20, user_n=20, tz="UTC"):
+def _mock_session_execute():
+    """A bare `AsyncMock().execute.return_value.scalars...` chain makes every
+    accessed attribute an AsyncMock too (since the parent is one), so
+    `.scalar_one_or_none()` returns a coroutine instead of a value — a real
+    unittest.mock gotcha. A `side_effect` returning a fresh plain MagicMock
+    per call sidesteps it, supporting both query shapes
+    ReviewEnrichmentUseCase issues: no existing summary row (`scalar_one_or_none`)
+    and no prior activity events (`scalars().all()`) — i.e. every game looks
+    brand new, always due."""
+    def _result(*args, **kwargs):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    return AsyncMock(side_effect=_result)
+
+
+def _config(games_per_run=20, max_reject_ratio=0.25, critic_n=20, user_n=20, growth_threshold=10, tz="UTC"):
     values = {
         "ingest.games_per_run": games_per_run,
         "reviews.critic_sample_size": critic_n,
         "reviews.user_sample_size": user_n,
+        "reviews.growth_threshold": growth_threshold,
     }
     float_values = {"dq.max_reject_ratio": max_reject_ratio}
     config = MagicMock()
@@ -43,8 +62,7 @@ def _parsed(metacritic_id) -> ParsedGame:
 def _use_case(game_repo, ingest_state_repo, fetch_detail, config=None, summarize=None):
     session = AsyncMock()
     session.add = MagicMock()
-    session.execute = AsyncMock()
-    session.execute.return_value.scalars.return_value.all.return_value = []
+    session.execute = _mock_session_execute()
     return IngestGamesUseCase(
         session=session,
         config=config or _config(),
@@ -53,6 +71,9 @@ def _use_case(game_repo, ingest_state_repo, fetch_detail, config=None, summarize
         fetch_listing=AsyncMock(return_value=[GameStub(metacritic_slug="game-1", metacritic_id=None)]),
         fetch_detail=fetch_detail,
         fetch_reviews=AsyncMock(return_value="<html>reviews</html>"),
+        fetch_review_json=AsyncMock(
+            return_value='{"data": {"totalResults": 1, "items": [{"quote": "q"}]}}'
+        ),
         summarize=summarize or AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m")),
     ), session
 
@@ -154,6 +175,63 @@ async def test_run_updates_current_item_in_meta_as_it_processes_each_game(monkey
     assert session.commit.await_count >= 2  # initial "running" + at least one per item
 
 
+async def test_writes_an_ingest_new_activity_event_for_a_newly_admitted_game(monkeypatch):
+    parsed = _parsed(1)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.build_parsed_game", lambda resolved: parsed)
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.parse_reviews", lambda html, sample_size: ["quote"])
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))  # is_new=True
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    summarize = AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m"))
+    use_case, session = _use_case(
+        game_repo, _ingest_state_repo(), fetch_detail=AsyncMock(return_value=_GAME_HTML), summarize=summarize
+    )
+
+    run_row = await use_case.run()
+
+    activity_events = [
+        c.args[0] for c in session.add.call_args_list if type(c.args[0]).__name__ == "GameActivityEventORM"
+    ]
+    ingest_events = [e for e in activity_events if e.event_type == "ingest_new"]
+    assert len(ingest_events) == 1
+    assert ingest_events[0].game_id == 1
+    assert ingest_events[0].run_id == run_row.id
+
+
+async def test_writes_an_ingest_update_activity_event_for_an_existing_game(monkeypatch):
+    parsed = _parsed(1)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.build_parsed_game", lambda resolved: parsed)
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, False))  # is_new=False
+    game_repo.upsert_platform_scores = AsyncMock()
+    game_repo.has_review_summary = AsyncMock(return_value=True)
+
+    use_case, session = _use_case(
+        game_repo, _ingest_state_repo(), fetch_detail=AsyncMock(return_value=_GAME_HTML)
+    )
+
+    await use_case.run()
+
+    activity_events = [
+        c.args[0] for c in session.add.call_args_list if type(c.args[0]).__name__ == "GameActivityEventORM"
+    ]
+    assert len(activity_events) == 1
+    assert activity_events[0].event_type == "ingest_update"
+
+
 async def test_enrichment_is_skipped_for_an_already_enriched_existing_game(monkeypatch):
     """FR-024: re-ingesting an already-enriched game triggers zero LLM calls."""
     parsed = _parsed(1)
@@ -177,3 +255,68 @@ async def test_enrichment_is_skipped_for_an_already_enriched_existing_game(monke
     await use_case.run()
 
     summarize.assert_not_awaited()
+
+
+async def test_a_subsequent_run_always_tops_up_from_see_all_page_one_prioritized(monkeypatch):
+    """Real bug: See All's own cursor only moves forward and never revisits
+    page 1, but the listing drifts (new games get added to page 1 all day) —
+    a game published after the day's first run was permanently missed once
+    the cursor advanced past page 1. Every later run must ALSO re-check page
+    1, unconditionally (not just on shortfall), with page-1 results
+    prioritized so an already-full primary batch can't starve them, and with
+    duplicates (same slug from both sources) collapsed."""
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.build_parsed_game",
+        lambda resolved: _parsed(1),
+    )
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.parse_reviews", lambda html, sample_size: ["quote"]
+    )
+
+    from metacritic_game_tracker.domain.rules import SeeAllSource
+
+    async def fetch_listing(source):
+        if isinstance(source, SeeAllSource) and source.page == 1:
+            return [
+                GameStub(metacritic_slug="fresh-game", metacritic_id=None),
+                GameStub(metacritic_slug="overlap-game", metacritic_id=None),
+            ]
+        return [
+            GameStub(metacritic_slug="overlap-game", metacritic_id=None),  # duplicate, must collapse
+            GameStub(metacritic_slug="long-tail-game", metacritic_id=None),
+        ]
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = _mock_session_execute()
+
+    use_case = IngestGamesUseCase(
+        session=session,
+        config=_config(games_per_run=2),  # smaller than the 4 candidates below
+        ingest_state_repo=_ingest_state_repo(day_new_releases_done=True),
+        game_repo=game_repo,
+        fetch_listing=fetch_listing,
+        fetch_detail=AsyncMock(return_value=_GAME_HTML),
+        fetch_reviews=AsyncMock(return_value="<html>reviews</html>"),
+        fetch_review_json=AsyncMock(
+            return_value='{"data": {"totalResults": 1, "items": [{"quote": "q"}]}}'
+        ),
+        summarize=AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m")),
+    )
+
+    run_row = await use_case.run()
+
+    # Truncated to games_per_run=2: both slots go to the deduped page-1
+    # top-up (fresh-game, overlap-game) — long-tail-game is starved this run,
+    # which is the intended trade-off (drift recovery takes priority).
+    assert run_row.items_in == 2
+    assert game_repo.upsert.await_count == 2

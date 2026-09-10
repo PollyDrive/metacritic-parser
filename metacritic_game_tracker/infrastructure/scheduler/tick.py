@@ -71,3 +71,21 @@ async def decide(session: AsyncSession, config: RuntimeConfig, now: datetime) ->
     if now - last_finished_at >= interval:
         return TickDecision(True, "scheduled")
     return TickDecision(False, "not_due_yet")
+
+
+async def stage_due(session: AsyncSession, stage: str, interval_hours: int, now: datetime) -> bool:
+    """Is a scheduled (non-manual) run of `stage` due? review_refresh and
+    playthrough don't need ingest's hourly cadence — most hourly ticks find
+    nothing new to do (Decayed TTL refreshes are due every 3-7 days;
+    playthrough's daily YouTube budget is spent in one burst) — so each has
+    its own, coarser interval, checked against its own last completed run
+    the same DB-anchored way `decide()` checks ingest's."""
+    last_run_result = await session.execute(
+        select(func.max(PipelineRunORM.finished_at)).where(
+            PipelineRunORM.stage == stage, PipelineRunORM.status == "completed"
+        )
+    )
+    last_finished_at = last_run_result.scalar_one_or_none()
+    if last_finished_at is None:
+        return True
+    return now - last_finished_at >= timedelta(hours=interval_hours)

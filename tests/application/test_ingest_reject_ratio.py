@@ -80,10 +80,71 @@ async def test_run_aborts_and_does_not_advance_cursor_when_reject_ratio_exceeds_
         fetch_detail=AsyncMock(return_value="<html></html>"),
         fetch_reviews=AsyncMock(return_value="<html></html>"),
         summarize=AsyncMock(),
+        fetch_review_json=AsyncMock(return_value='{"data": {"totalResults": 0, "items": []}}'),
     )
 
     run_row = await use_case.run()
 
     assert run_row.status == "failed"
     game_repo.upsert.assert_not_awaited()
+    ingest_state_repo.advance.assert_not_awaited()
+
+
+def _gate_a_use_case(monkeypatch, ingest_state_repo):
+    """A payload that Gate A rejects (missing required keys)."""
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1},
+    )
+    return IngestGamesUseCase(
+        session=AsyncMock(add=MagicMock()),
+        config=_config(),
+        ingest_state_repo=ingest_state_repo,
+        game_repo=MagicMock(upsert=AsyncMock()),
+        fetch_listing=AsyncMock(return_value=[GameStub(metacritic_slug="g1", metacritic_id=None)]),
+        fetch_detail=AsyncMock(return_value="<html></html>"),
+        fetch_reviews=AsyncMock(return_value="<html></html>"),
+        summarize=AsyncMock(),
+        fetch_review_json=AsyncMock(return_value='{"data": {"totalResults": 0, "items": []}}'),
+    )
+
+
+async def test_a_gate_a_failure_sends_an_alert_email(monkeypatch):
+    """FR-030: a source-structure break MUST be logged CRITICAL *and* alerted
+    by email. This was inverted in the shipped code — nothing was sent here,
+    while a routine "playthrough video has no captions" outcome did send one."""
+    sent = []
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.send_alert_email",
+        lambda subject, body: sent.append((subject, body)),
+    )
+    ingest_state_repo = _ingest_state_repo()
+    use_case = _gate_a_use_case(monkeypatch, ingest_state_repo)
+
+    run_row = await use_case.run()
+
+    assert run_row.status == "failed"
+    assert "Gate A" in run_row.error_message
+    ingest_state_repo.advance.assert_not_awaited()
+    assert len(sent) == 1
+    assert "Gate A" in sent[0][0]
+
+
+async def test_a_failing_alert_channel_does_not_mask_the_gate_a_failure(monkeypatch):
+    """The alert is a side channel: if Resend is down or unconfigured, the run
+    must still fail loudly on its own terms rather than turning an alerting
+    problem into a different-looking ingestion crash."""
+    def exploding_send(subject, body):
+        raise RuntimeError("resend unreachable")
+
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.send_alert_email", exploding_send
+    )
+    ingest_state_repo = _ingest_state_repo()
+    use_case = _gate_a_use_case(monkeypatch, ingest_state_repo)
+
+    run_row = await use_case.run()
+
+    assert run_row.status == "failed"
+    assert "Gate A" in run_row.error_message
     ingest_state_repo.advance.assert_not_awaited()

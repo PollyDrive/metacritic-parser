@@ -19,9 +19,9 @@ def _session(running=None, pending=None, playthrough_enabled=True):
     session = AsyncMock()
 
     running_result = MagicMock()
-    running_result.scalar_one_or_none.return_value = running
+    running_result.scalars.return_value.first.return_value = running
     pending_result = MagicMock()
-    pending_result.scalar_one_or_none.return_value = pending
+    pending_result.scalars.return_value.first.return_value = pending
     session.execute.side_effect = [running_result, pending_result]
 
     config_row = MagicMock()
@@ -66,7 +66,8 @@ def test_post_run_defaults_to_ingest_when_kind_is_omitted(app):
 
 
 def test_post_run_returns_409_when_that_pipeline_is_already_running(app):
-    session = _session(running=1, pending=None)
+    running_row = MagicMock(stage="ingest")
+    session = _session(running=running_row, pending=None)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 
@@ -77,7 +78,8 @@ def test_post_run_returns_409_when_that_pipeline_is_already_running(app):
 
 
 def test_post_run_returns_409_when_a_request_of_that_kind_is_already_pending(app):
-    session = _session(running=None, pending=7)
+    pending_row = MagicMock(kind="ingest")
+    session = _session(running=None, pending=pending_row)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from metacritic_game_tracker.infrastructure.scheduler.tick import decide
+from metacritic_game_tracker.infrastructure.scheduler.tick import decide, stage_due
 
 
 def _config(enabled=True, runs_per_hour=1, start="00:00", end="24:00", tz="UTC"):
@@ -97,3 +97,35 @@ async def test_a_restart_does_not_reset_the_schedule():
 
     assert decision.should_run is True
     assert decision.reason == "scheduled"
+
+
+def _stage_session(last_finished_at):
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = last_finished_at
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+async def test_stage_due_when_the_stage_has_never_completed_a_run():
+    session = _stage_session(last_finished_at=None)
+
+    assert await stage_due(session, "playthrough", 3, now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC)) is True
+
+
+async def test_stage_not_due_within_its_own_interval():
+    last_run = datetime(2026, 1, 1, 11, 0, tzinfo=UTC)
+    session = _stage_session(last_finished_at=last_run)
+
+    due = await stage_due(session, "review_refresh", 3, now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
+
+    assert due is False
+
+
+async def test_stage_due_once_its_own_interval_has_elapsed():
+    last_run = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
+    session = _stage_session(last_finished_at=last_run)
+
+    due = await stage_due(session, "playthrough", 3, now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
+
+    assert due is True

@@ -36,6 +36,9 @@
         {% else %}
         <p class="pipeline-meta">No runs recorded yet.</p>
         {% endif %}
+        {% if p.coverage %}
+        <p class="pipeline-meta">Coverage: {{ p.coverage.covered }}/{{ p.coverage.total }} games have a playthrough</p>
+        {% endif %}
         <button type="button" class="run-btn" data-kind="{{ p.kind }}">Run now</button>
         <p class="run-status"{% if not (p.latest and p.latest.status == "running" and p.latest.current_item) %} hidden{% endif %}>{% if p.latest and p.latest.status == "running" and p.latest.current_item %}Running… {{ p.latest.current_item }}{% endif %}</p>
       </div>
@@ -44,6 +47,7 @@
 
     <div class="tabs-header">
       <button type="button" class="tab-btn active" data-target="tab-history">Run History</button>
+      <button type="button" class="tab-btn" data-target="tab-activity">Activity Feed</button>
       <button type="button" class="tab-btn" data-target="tab-errors">Errors Log</button>
     </div>
 
@@ -51,11 +55,16 @@
       <div class="table-scroll">
         <table class="ops">
           <thead>
-            <tr><th>Pipeline</th><th>Status</th><th>Started</th><th>Finished</th><th>In</th><th>Accepted</th><th>Rejected</th><th>Deferred</th><th>Reason</th></tr>
+            <tr><th></th><th>Pipeline</th><th>Status</th><th>Started</th><th>Finished</th><th>In</th><th>Accepted</th><th>Rejected</th><th>Deferred</th><th>YouTube calls</th><th>Reason</th></tr>
           </thead>
           <tbody id="runs">
             {% for run in runs %}
-            <tr class="status-{{ run.status }}">
+            {% set has_detail = run.events or run.rejects %}
+            <tr class="status-{{ run.status }} run-row{% if has_detail %} run-row--expandable{% endif %}"
+                {% if has_detail %}data-run-toggle="run-events-{{ run.id }}"{% endif %}>
+              <td class="run-expand-cell">
+                {% if has_detail %}<button type="button" class="run-expand-btn" aria-expanded="false">&rsaquo;</button>{% endif %}
+              </td>
               <td>{{ run.stage }}</td>
               <td class="status">{{ run.status }}</td>
               <td>{{ run.started_at }}</td>
@@ -64,7 +73,97 @@
               <td>{{ run.items_accepted }}</td>
               <td>{{ run.items_rejected }}</td>
               <td>{{ run.items_deferred if 'items_deferred' in run else 0 }}</td>
+              <td>{{ run.youtube_calls if run.youtube_calls is not none else "—" }}</td>
               <td class="error">{{ run.error_message or "" }}</td>
+            </tr>
+            {% if has_detail %}
+            <tr id="run-events-{{ run.id }}" class="run-events-row" hidden>
+              <td colspan="11">
+                {% if run.events %}
+                <table class="ops ops--nested">
+                  <thead>
+                    <tr><th>Time</th><th>Game</th><th>Event</th><th>Detail</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for event in run.events %}
+                    <tr>
+                      <td style="white-space: nowrap">{{ event.created_at.strftime("%H:%M:%S") }}</td>
+                      <td><a href="/games/{{ event.game.id }}">{{ event.game.title }}</a></td>
+                      <td><span class="pipeline-badge">{{ event.event_type }}</span></td>
+                      <td>
+                        {% if event.event_type == "review_refresh" %}
+                          {{ event.details.audience }} reviews &mdash;
+                          first pass {{ event.details.get("first_pass_reviews", "?") }} &middot;
+                          new {{ event.details.delta }} &middot;
+                          total {{ event.details.reviews_found }}
+                        {% elif event.event_type == "playthrough_generated" %}
+                          <a href="{{ event.details.video_url }}" target="_blank">View video</a>
+                        {% elif event.details.source %}
+                          {{ event.details.source }}
+                        {% endif %}
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                {% endif %}
+                {% if run.rejects %}
+                <table class="ops ops--nested">
+                  <thead>
+                    <tr><th>Time</th><th>Item</th><th>Reason</th><th>Detail</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for rj in run.rejects %}
+                    <tr>
+                      <td style="white-space: nowrap">{{ rj.time }}</td>
+                      <td>{{ rj.item_ref }}</td>
+                      <td><span class="pipeline-badge">{{ rj.reason_code }}</span></td>
+                      <td class="error">{{ rj.reason_detail }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="tab-activity" class="tab-pane">
+      <div class="table-scroll">
+        <table class="ops">
+          <thead>
+            <tr><th>Timestamp</th><th>Pipeline</th><th>Event</th><th>Target Item</th><th>Details</th></tr>
+          </thead>
+          <tbody>
+            {% for event in activity_feed %}
+            <tr>
+              <td style="white-space: nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</td>
+              <td><span class="pipeline-badge">{{ event.run.stage if event.run else "unknown" }}</span></td>
+              <td>{{ event.event_type }}</td>
+              <td><a href="/games/{{ event.game.id }}">{{ event.game.title }}</a></td>
+              <td>
+                {% if event.details %}
+                  {% if event.event_type == "review_refresh" %}
+                    {{ event.details.audience }} reviews &mdash;
+                    first pass {{ event.details.get("first_pass_reviews", "?") }} &middot;
+                    new {{ event.details.delta }} &middot;
+                    total {{ event.details.reviews_found }}
+                  {% elif event.event_type == "playthrough_generated" %}
+                    <a href="{{ event.details.video_url }}" target="_blank">View Video</a>
+                  {% else %}
+                    {{ event.details.source }}
+                  {% endif %}
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="5" style="text-align: center; color: var(--text-dim); padding: 2rem;">No events recorded yet.</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -184,6 +283,17 @@
         document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
         btn.classList.add("active");
         document.getElementById(btn.dataset.target).classList.add("active");
+      });
+    });
+
+    document.querySelectorAll(".run-row--expandable").forEach(row => {
+      row.addEventListener("click", () => {
+        const target = document.getElementById(row.dataset.runToggle);
+        const btn = row.querySelector(".run-expand-btn");
+        if (!target) return;
+        target.hidden = !target.hidden;
+        btn.setAttribute("aria-expanded", String(!target.hidden));
+        row.classList.toggle("run-row--open", !target.hidden);
       });
     });
   </script>

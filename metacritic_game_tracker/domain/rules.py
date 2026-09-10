@@ -52,13 +52,19 @@ def roll_over_if_new_day(state: IngestState, today: date) -> IngestState:
 def plan_ingest(state: IngestState) -> IngestPlan:
     """FR-002/003: New Releases on the first run of the day, See All (at the stored
     cursor) afterward. A top-up source is always prepared alongside New Releases so
-    the orchestrator can use it immediately if New Releases comes up short (FR-005)."""
+    the orchestrator can use it immediately if New Releases comes up short (FR-005).
+
+    On every subsequent run, topup is ALWAYS See All's page 1 — not just on
+    shortfall. See All's own cursor only moves forward and never revisits page
+    1, but the listing itself drifts (new games are added to page 1 all day),
+    so without this, anything published after the day's first run would be
+    permanently missed once the cursor has advanced past page 1."""
     if not state.day_new_releases_done:
         return IngestPlan(
             primary=NewReleasesSource(),
             topup=SeeAllSource(page=state.see_all_next_page),
         )
-    return IngestPlan(primary=SeeAllSource(page=state.see_all_next_page), topup=None)
+    return IngestPlan(primary=SeeAllSource(page=state.see_all_next_page), topup=SeeAllSource(page=1))
 
 
 def advance_state(
@@ -73,7 +79,12 @@ def advance_state(
     see_all_next_page = state.see_all_next_page
     if isinstance(plan.primary, SeeAllSource):
         see_all_next_page += 1
-    if topup_used:
+    if topup_used and isinstance(plan.primary, NewReleasesSource):
+        # Day-start's shortfall topup consumes page 1 as the day's first See
+        # All page, so it advances the cursor like any other See All primary
+        # run. A later run's always-on drift-correction topup re-checks page
+        # 1 every single time and must NOT advance the cursor — it isn't a
+        # continuation of the long-tail traversal, it's a fixed recheck.
         see_all_next_page += 1
     return replace(
         state,

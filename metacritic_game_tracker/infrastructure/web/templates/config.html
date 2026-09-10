@@ -7,16 +7,16 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <nav class="crumb"><a href="/monitoring">&larr; К мониторингу</a></nav>
+  <nav class="crumb"><a href="/monitoring">&larr; Back to Monitoring</a></nav>
 
   <main class="page">
-    <h1>Настройки</h1>
+    <h1>Settings</h1>
 
     <form method="post" action="/monitoring/config">
       <div class="table-scroll">
         <table class="ops">
           <thead>
-            <tr><th>Параметр</th><th>Зачем нужна</th><th>Значение</th><th>Диапазон</th><th>Изменил</th></tr>
+            <tr><th>Parameter</th><th>Description</th><th>Value</th><th>Range</th><th>Updated By</th></tr>
           </thead>
           <tbody>
             {% for row in rows %}
@@ -28,22 +28,30 @@
               <td class="param-why">{{ why.get(row.key, "") }}</td>
               <td>
                 <label class="visually-hidden" for="cfg-{{ row.key }}">{{ labels.get(row.key, row.key) }}</label>
-                {% if row.value_type == "bool" %}
+                {% if row.key == "ingest.timezone" %}
+                  <select id="cfg-{{ row.key }}" name="{{ row.key }}">
+                    {% for tz in timezones %}
+                      <option value="{{ tz }}" {% if row.value == tz %}selected{% endif %}>{{ tz }}</option>
+                    {% endfor %}
+                  </select>
+                {% elif row.value_type == "bool" %}
                   <input type="hidden" name="{{ row.key }}" value="false">
                   <input id="cfg-{{ row.key }}" type="checkbox" class="cfg-bool" name="{{ row.key }}" value="true" {% if row.value == "true" %}checked{% endif %}>
                 {% elif row.value_type == "int" %}
                   <input id="cfg-{{ row.key }}" type="number" step="1"
-                         {% if row.min_value is not none %}min="{{ row.min_value }}"{% endif %}
-                         {% if row.max_value is not none %}max="{{ row.max_value }}"{% endif %}
+                         onkeydown="return !['e', 'E', '.', ',', '+', '-'].includes(event.key)"
+                         {% if row.min_value is not none %}min="{{ row.min_value|int }}"{% endif %}
+                         {% if row.max_value is not none %}max="{{ row.max_value|int }}"{% endif %}
                          name="{{ row.key }}" value="{{ row.value }}" required>
                 {% elif row.value_type == "float" %}
                   <input id="cfg-{{ row.key }}" type="number" step="any"
+                         onkeydown="return !['e', 'E', '+', '-'].includes(event.key)"
                          {% if row.min_value is not none %}min="{{ row.min_value }}"{% endif %}
                          {% if row.max_value is not none %}max="{{ row.max_value }}"{% endif %}
                          name="{{ row.key }}" value="{{ row.value }}" required>
                 {% elif row.value_type == "time" %}
                   <input id="cfg-{{ row.key }}" type="text" pattern="([01][0-9]|2[0-4]):[0-5][0-9]"
-                         title="ЧЧ:ММ, например 00:00 или 24:00"
+                         title="HH:MM, e.g., 00:00 or 24:00"
                          name="{{ row.key }}" value="{{ row.value }}" required>
                 {% else %}
                   <input id="cfg-{{ row.key }}" type="text" name="{{ row.key }}" value="{{ row.value }}" required>
@@ -54,7 +62,7 @@
                 {% if row.value_type == "bool" %}
                   &mdash;
                 {% elif row.min_value is not none or row.max_value is not none %}
-                  {{ row.min_value }}&ndash;{{ row.max_value }}
+                  {{ (row.min_value|int) if row.min_value == (row.min_value|int) else row.min_value }}&ndash;{{ (row.max_value|int) if row.max_value == (row.max_value|int) else row.max_value }}
                 {% endif %}
               </td>
               <td>{{ row.updated_by or "" }}</td>
@@ -63,7 +71,7 @@
           </tbody>
         </table>
       </div>
-      <button type="submit">Сохранить</button>
+      <button type="submit">Save Settings</button>
     </form>
   </main>
 </body>

@@ -60,6 +60,11 @@ def test_plan_ingest_uses_new_releases_first_with_a_topup_ready():
 
 
 def test_plan_ingest_uses_see_all_at_stored_cursor_once_new_releases_done():
+    """Real bug: the cursor only moves forward and never revisits page 1, but
+    the listing itself drifts (new games are added to page 1 throughout the
+    day) — without an always-on page-1 topup on every subsequent run, games
+    published after the day's first run were permanently missed once the
+    cursor had advanced past page 1."""
     state = IngestState(
         current_day=date(2026, 1, 1),
         day_processed_count=20,
@@ -68,7 +73,7 @@ def test_plan_ingest_uses_see_all_at_stored_cursor_once_new_releases_done():
     )
     plan = plan_ingest(state)
     assert plan.primary == SeeAllSource(page=3)
-    assert plan.topup is None
+    assert plan.topup == SeeAllSource(page=1)
 
 
 def test_advance_state_marks_new_releases_done_and_leaves_cursor_when_no_topup_needed():
@@ -110,6 +115,22 @@ def test_advance_state_advances_cursor_on_subsequent_see_all_runs():
     plan = plan_ingest(state)
     new_state = advance_state(state, plan, primary_count=20, topup_used=False, topup_count=0)
     assert new_state.see_all_next_page == 4
+    assert new_state.day_processed_count == 40
+
+
+def test_advance_state_does_not_double_advance_when_the_always_on_topup_fires():
+    """Real bug regression: a later run's page-1 topup is a fixed recheck,
+    not a continuation of the long-tail cursor — using it must advance the
+    cursor exactly once (for the SeeAllSource primary), not twice."""
+    state = IngestState(
+        current_day=date(2026, 1, 1),
+        day_processed_count=20,
+        day_new_releases_done=True,
+        see_all_next_page=3,
+    )
+    plan = plan_ingest(state)
+    new_state = advance_state(state, plan, primary_count=18, topup_used=True, topup_count=2)
+    assert new_state.see_all_next_page == 4  # not 5
     assert new_state.day_processed_count == 40
 
 

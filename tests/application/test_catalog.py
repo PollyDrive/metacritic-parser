@@ -13,22 +13,24 @@ def _game(id_=1, title="Elden Ring"):
 async def test_list_games_returns_games_from_the_repository():
     repo = MagicMock()
     repo.list = AsyncMock(return_value=[_game(1), _game(2)])
+    repo.count_list = AsyncMock(return_value=2)
     use_case = CatalogUseCase(repo)
 
-    games = await use_case.list_games()
+    paginated = await use_case.list_games()
 
-    assert len(games) == 2
-    repo.list.assert_awaited_once_with(platform=None, q=None, sort=None)
+    assert len(paginated.games) == 2
+    repo.list.assert_awaited_once_with(platform=None, q=None, sort=None, limit=50, offset=0)
 
 
 async def test_list_games_passes_filter_search_sort_through():
     repo = MagicMock()
     repo.list = AsyncMock(return_value=[])
+    repo.count_list = AsyncMock(return_value=0)
     use_case = CatalogUseCase(repo)
 
     await use_case.list_games(platform="PC", q="elden", sort="rating")
 
-    repo.list.assert_awaited_once_with(platform="PC", q="elden", sort="rating")
+    repo.list.assert_awaited_once_with(platform="PC", q="elden", sort="rating", limit=50, offset=0)
 
 
 async def test_list_platforms_delegates_to_the_repository():

@@ -17,7 +17,10 @@ from metacritic_game_tracker.infrastructure.config.runtime import (
 )
 from metacritic_game_tracker.infrastructure.db.session import session_scope
 from metacritic_game_tracker.infrastructure.web.auth import require_operator
-from metacritic_game_tracker.infrastructure.web.config_labels import RU_LABELS, RU_WHY
+from metacritic_game_tracker.infrastructure.web.config_labels import (
+    EN_LABELS,
+    EN_WHY,
+)
 
 router = APIRouter()
 
@@ -35,8 +38,10 @@ async def show_config(
 ):
     config = RuntimeConfig(session)
     rows = await config.list_all()
+    import zoneinfo
+    timezones = sorted(zoneinfo.available_timezones())
     return request.app.state.templates.TemplateResponse(
-        request, "config.html", {"rows": rows, "errors": {}, "labels": RU_LABELS, "why": RU_WHY}
+        request, "config.html", {"rows": rows, "errors": {}, "labels": EN_LABELS, "why": EN_WHY, "timezones": timezones}
     )
 
 
@@ -63,10 +68,12 @@ async def save_config(
     if errors:
         await session.rollback()
         rows = await config.list_all()
+        import zoneinfo
+        timezones = sorted(zoneinfo.available_timezones())
         return request.app.state.templates.TemplateResponse(
             request,
             "config.html",
-            {"rows": rows, "errors": errors, "labels": RU_LABELS, "why": RU_WHY},
+            {"rows": rows, "errors": errors, "labels": EN_LABELS, "why": EN_WHY, "timezones": timezones},
             status_code=422,
         )
 

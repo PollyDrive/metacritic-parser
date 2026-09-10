@@ -25,15 +25,28 @@ from metacritic_game_tracker.infrastructure.db.models import (
     ReviewSummaryORM,
 )
 
-Step = Literal["critic_summary", "user_summary", "playthrough"]
+Step = Literal["critic_summary", "user_summary", "playthrough", "detail_fields"]
 
 _STEP_AUDIENCE = {"critic_summary": "critic", "user_summary": "user"}
+
+
+class RunBudgetExhausted(Exception):
+    """A do_work callable raises this to signal a run-wide resource limit hit
+    (e.g. playthrough's daily YouTube search quota) — distinct from a
+    per-game failure: `run()` stops iterating immediately and records exactly
+    ONE pipeline_rejects row, instead of every remaining game silently
+    returning nothing with zero trace in the Errors Log."""
 
 
 @dataclass
 class StepOutcome:
     status: Literal["succeeded", "retrying", "abandoned"]
     attempt: EnrichmentAttemptORM | None = None
+    # Most do_work callables don't return anything meaningful (implicit None) —
+    # only playthrough's "no findable video" (a normal, expected outcome, not
+    # an error) explicitly returns False. Defaulting True for None preserves
+    # every other step's existing behavior.
+    produced: bool = True
 
 
 class BackfillEnrichmentUseCase:
@@ -51,8 +64,11 @@ class BackfillEnrichmentUseCase:
             return StepOutcome("retrying", attempt)
 
         try:
-            await do_work(game)
-            return StepOutcome("succeeded", attempt)
+            result = await do_work(game)
+            produced = True if result is None else bool(result)
+            return StepOutcome("succeeded", attempt, produced=produced)
+        except RunBudgetExhausted:
+            raise  # a run-wide stop signal, not a per-item failure — let run() handle it
         except Exception as exc:
             max_attempts = await self._config.get_int("backfill.max_attempts")
             backoff_base = await self._config.get_int("backfill.backoff_base_minutes")
@@ -90,7 +106,18 @@ class BackfillEnrichmentUseCase:
             return StepOutcome("retrying", attempt)
 
     async def _games_missing(self, step: Step) -> list[tuple[GameORM, EnrichmentAttemptORM | None]]:
-        if step == "playthrough":
+        if step == "detail_fields":
+            # FR-028: a recoverable-field gap (description/developer/cover_image)
+            # must queue for re-extraction, not sit unfilled forever — Gate B
+            # computed this gap but nothing ever consumed it until now.
+            stmt = select(GameORM).where(
+                or_(
+                    GameORM.description.is_(None), GameORM.description == "",
+                    GameORM.developer.is_(None), GameORM.developer == "",
+                    GameORM.cover_image_url.is_(None), GameORM.cover_image_url == "",
+                )
+            )
+        elif step == "playthrough":
             # research.md §6: the YouTube search budget is limited, so higher-Metascore
             # (then more recent) games are searched for a playthrough first.
             stmt = (
@@ -145,7 +172,10 @@ class BackfillEnrichmentUseCase:
         items_accepted = 0
         items_deferred = 0
         items_rejected = 0
+        stopped_early = False
         for step in steps:
+            if stopped_early:
+                break
             for game, attempt in await self._games_missing(step):
                 items_in += 1
                 # Committed per item (not only in the batch's final commit) so a
@@ -153,10 +183,24 @@ class BackfillEnrichmentUseCase:
                 # which game a manual run is currently processing.
                 run_row.meta = {"current_item": game.title}
                 await self._session.commit()
-                outcome = await self.process_game_step(
-                    game, step, attempt, do_work=lambda g, s=step: do_work_for_step(s, g)
-                )
-                if outcome.status == "succeeded":
+                try:
+                    outcome = await self.process_game_step(
+                        game, step, attempt, do_work=lambda g, s=step, rid=run_row.id: do_work_for_step(s, g, rid)
+                    )
+                except RunBudgetExhausted as exc:
+                    self._session.add(
+                        PipelineRejectORM(
+                            stage=stage,
+                            run_id=run_row.id,
+                            item_ref=str(game.id),
+                            reason_code="budget_exhausted",
+                            reason_detail=str(exc),
+                            created_at=datetime.now(UTC),
+                        )
+                    )
+                    stopped_early = True
+                    break
+                if outcome.status == "succeeded" and outcome.produced:
                     items_accepted += 1
                 elif outcome.status == "retrying":
                     items_deferred += 1

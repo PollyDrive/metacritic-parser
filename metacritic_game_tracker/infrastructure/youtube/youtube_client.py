@@ -23,7 +23,6 @@ import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import CouldNotRetrieveTranscript, NoTranscriptFound
 
-from metacritic_game_tracker.infrastructure.alerting.email import send_alert_email
 from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import VideoCandidate
 
 _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
@@ -94,11 +93,11 @@ def _find_english_transcript(video_id: str):
 def _fetch_transcript_sync(video_id: str) -> str | None:
     try:
         transcript = _find_english_transcript(video_id).fetch()
-    except CouldNotRetrieveTranscript as exc:
-        send_alert_email(
-            "No transcript available for playthrough video",
-            f"video_id={video_id}\nreason={exc}",
-        )
+    except CouldNotRetrieveTranscript:
+        # A normal, expected outcome (spec US4 AC-2) — the caller records it as
+        # a `no_transcript` pipeline_reject. It is NOT an operator alert:
+        # emailing here inverted FR-030, paging on routine misses while a real
+        # source-structure break (Gate A) sent nothing.
         return None
     return " ".join(snippet.text for snippet in transcript.snippets)
 

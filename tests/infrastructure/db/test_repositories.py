@@ -116,3 +116,38 @@ async def test_upsert_platform_scores_adds_a_newly_released_platform_on_recrawl(
     mock_session.add.assert_called_once()
     added = mock_session.add.call_args[0][0]
     assert added.platform == "PlayStation 5"
+
+
+async def test_upsert_platform_scores_updates_the_games_in_memory_relationship_too(mock_session):
+    """Real bug: `platform_scores` is `lazy="selectin"` — eagerly loaded ONCE
+    when the game is fetched, then cached. For a brand-new game, that first
+    load sees zero rows (they don't exist yet), and `session.add(row)` alone
+    never updates the already-cached Python-side list — any code reading
+    `game.platform_scores` right after this call (e.g. review-refresh's
+    per-platform review sampling) would see an empty list even though the
+    rows were just written. Must append to the relationship directly, not
+    just hand the session a bare object with a matching foreign key."""
+    game = GameORM(id=1, metacritic_id=1, metacritic_slug="elden-ring", title="Elden Ring")
+    game.platform_scores = []  # what a brand-new game's selectin load actually returns
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []  # no existing rows in the DB either
+    mock_session.execute.return_value = result
+    repo = GameRepository(mock_session)
+
+    parsed = _parsed()
+    parsed = ParsedGame(
+        metacritic_id=parsed.metacritic_id,
+        metacritic_slug=parsed.metacritic_slug,
+        title=parsed.title,
+        release_date=parsed.release_date,
+        description=parsed.description,
+        developer=parsed.developer,
+        cover_image_url=parsed.cover_image_url,
+        video_url=parsed.video_url,
+        genres=parsed.genres,
+        platforms=[PlatformScore(platform="PC", metascore=91, userscore=8.1)],
+    )
+
+    await repo.upsert_platform_scores(game, parsed)
+
+    assert [ps.platform for ps in game.platform_scores] == ["PC"]
