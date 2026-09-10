@@ -30,13 +30,12 @@ services:
       db:
         condition: service_started
     ports:
-      - "${APP_HOST_PORT:-8001}:8000"
+      - "${APP_HOST_PORT:-8001}:${APP_PORT:-8000}"
     env_file:
       - .env
     environment:
-      # .env содержит host-значение (localhost:5439) для локальной разработки;
-      # внутри сети compose база доступна как db:5432
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-metacritic_game_tracker_db}
+      APP_PORT: ${APP_PORT:-8000}
     volumes:
       - ./logs:/app/logs
       - .:/app
