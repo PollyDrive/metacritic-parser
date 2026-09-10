@@ -132,7 +132,8 @@ jobs:
           # Убираем .:/app volume — на VPS только ./logs нужен
           content = re.sub(r'^\s*-\s*\.:/app\s*\n', '', content, flags=re.MULTILINE)
           # Порты: только на 127.0.0.1 (nginx реверс-прокси)
-          content = re.sub(r'\$\{APP_HOST_PORT:-\d+\}', f'127.0.0.1:{app_port}', content)
+          # В docker-compose.yml APP_HOST_PORT уже имеет префикс 127.0.0.1:, поэтому не дублируем его
+          content = re.sub(r'\$\{APP_HOST_PORT:-\d+\}', app_port, content)
           content = re.sub(r'\$\{DB_HOST_PORT:-\d+\}', f'127.0.0.1:{db_port}', content)
           # Фоллбэк для хардкоженных значений
           content = content.replace('- "8001:8000"', f'- "127.0.0.1:{app_port}:8080"')
