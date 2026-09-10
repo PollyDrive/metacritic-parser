@@ -24,6 +24,15 @@ from metacritic_game_tracker.infrastructure.web.config_labels import (
 
 router = APIRouter()
 
+# These three master switches live on /monitoring now, right on each
+# pipeline's own card, so "is it on" and "is it running" are visible in one
+# place — not duplicated here.
+_MOVED_TO_MONITORING = {
+    "ingest.enabled",
+    "enrichment.review_summary_enabled",
+    "enrichment.playthrough_enabled",
+}
+
 
 async def get_config_session() -> AsyncSession:
     async with session_scope() as session:
@@ -37,7 +46,7 @@ async def show_config(
     operator: str = Depends(require_operator),
 ):
     config = RuntimeConfig(session)
-    rows = await config.list_all()
+    rows = [row for row in await config.list_all() if row.key not in _MOVED_TO_MONITORING]
     import zoneinfo
     timezones = sorted(zoneinfo.available_timezones())
     return request.app.state.templates.TemplateResponse(

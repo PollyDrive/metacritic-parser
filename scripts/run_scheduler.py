@@ -31,7 +31,7 @@ from metacritic_game_tracker.infrastructure.db.session import session_scope
 from metacritic_game_tracker.infrastructure.dq import gates
 from metacritic_game_tracker.infrastructure.llm.llm_client import call_llm
 from metacritic_game_tracker.infrastructure.llm.review_summarizer import summarize_reviews
-from metacritic_game_tracker.infrastructure.scheduler.tick import decide, stage_due
+from metacritic_game_tracker.infrastructure.scheduler.tick import decide, dispatch_due, stage_due
 from metacritic_game_tracker.infrastructure.scraper import parser
 from metacritic_game_tracker.infrastructure.scraper.metacritic_client import MetacriticClient
 from metacritic_game_tracker.infrastructure.youtube.quota_budget import YoutubeQuotaBudget
@@ -196,13 +196,13 @@ async def _run_review_refresh(session, http_client: httpx.AsyncClient) -> None:
 
 
 async def _run_playthrough(session, http_client: httpx.AsyncClient) -> PipelineRunORM | None:
-    """Pipeline 3 of 3: YouTube playthrough takeaways. Gated by
-    `enrichment.playthrough_enabled` — a deployment without a YouTube API key
-    (or one that hasn't opted in) gets no attempted run at all, not a run
-    that immediately fails on every game."""
+    """Pipeline 3 of 3: YouTube playthrough takeaways. Whether this gets
+    called at all — scheduled runs only, or a manual trigger too, regardless
+    of `enrichment.playthrough_enabled` — is decided by `main()`'s
+    `dispatch_due()` call, not here (FR-009, feature 003): a deployment
+    without a YouTube API key (or one that hasn't opted in) gets no
+    *scheduled* run at all, but an explicit manual "Run now" still runs it."""
     config = RuntimeConfig(session)
-    if not await config.get_bool("enrichment.playthrough_enabled"):
-        return None
 
     async def llm_call(route, prompt):
         return await call_llm(route, prompt, http_client)
@@ -271,23 +271,29 @@ async def main() -> None:
                         # hourly cadence (Decayed TTL refreshes are due every
                         # 3-7 days; playthrough's daily budget burns in one
                         # burst) — a manual "Run now" (kind == the stage name)
-                        # always fires; only a scheduled tick is throttled.
-                        if kind == "review_refresh" or (
-                            kind == "scheduled"
-                            and await stage_due(
-                                session, "review_refresh",
-                                await config.get_int("review_refresh.interval_hours"),
-                                datetime.now(UTC),
-                            )
+                        # always fires regardless of that pipeline's own enable
+                        # switch (FR-009); only a scheduled tick is gated by
+                        # both the switch and stage_due (dispatch_due).
+                        review_refresh_due = await stage_due(
+                            session, "review_refresh",
+                            await config.get_int("review_refresh.interval_hours"),
+                            datetime.now(UTC),
+                        )
+                        if dispatch_due(
+                            kind, "review_refresh",
+                            await config.get_bool("enrichment.review_summary_enabled"),
+                            review_refresh_due,
                         ):
                             await _run_review_refresh(session, http_client)
-                        if kind == "playthrough" or (
-                            kind == "scheduled"
-                            and await stage_due(
-                                session, "playthrough",
-                                await config.get_int("playthrough.interval_hours"),
-                                datetime.now(UTC),
-                            )
+                        playthrough_due = await stage_due(
+                            session, "playthrough",
+                            await config.get_int("playthrough.interval_hours"),
+                            datetime.now(UTC),
+                        )
+                        if dispatch_due(
+                            kind, "playthrough",
+                            await config.get_bool("enrichment.playthrough_enabled"),
+                            playthrough_due,
                         ):
                             await _run_playthrough(session, http_client)
                         await session.commit()

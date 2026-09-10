@@ -335,7 +335,7 @@ ul.game-list .overall-scores {
   border-right: 1px solid var(--border);
 }
 
-.score-block.critic .score-label {
+.score-block .score-label {
   color: var(--accent-ink);
   background: var(--accent);
   border-right-color: var(--accent);
@@ -723,7 +723,6 @@ ul.similar-games li {
 .pipeline-badge {
   font-size: 0.72rem;
   font-weight: 700;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
@@ -751,6 +750,33 @@ ul.similar-games li {
   font-size: 0.8rem;
   margin: 0 0 0.5rem;
   line-height: 1.5;
+}
+
+.pipeline-toggle {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.toggle-switch {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.toggle-switch.is-on {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.toggle-switch.is-off {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .pipeline-card .run-btn {

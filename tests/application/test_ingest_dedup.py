@@ -29,7 +29,10 @@ def _mock_session_execute():
     return AsyncMock(side_effect=_result)
 
 
-def _config(games_per_run=20, max_reject_ratio=0.25, critic_n=20, user_n=20, growth_threshold=10, tz="UTC"):
+def _config(
+    games_per_run=20, max_reject_ratio=0.25, critic_n=20, user_n=20, growth_threshold=10,
+    review_summary_enabled=True,
+):
     values = {
         "ingest.games_per_run": games_per_run,
         "reviews.critic_sample_size": critic_n,
@@ -37,10 +40,11 @@ def _config(games_per_run=20, max_reject_ratio=0.25, critic_n=20, user_n=20, gro
         "reviews.growth_threshold": growth_threshold,
     }
     float_values = {"dq.max_reject_ratio": max_reject_ratio}
+    bool_values = {"enrichment.review_summary_enabled": review_summary_enabled}
     config = MagicMock()
     config.get_int = AsyncMock(side_effect=lambda k: values[k])
     config.get_float = AsyncMock(side_effect=lambda k: float_values[k])
-    config.get_str = AsyncMock(return_value=tz)
+    config.get_bool = AsyncMock(side_effect=lambda k: bool_values[k])
     return config
 
 
@@ -116,6 +120,34 @@ async def test_enrichment_runs_for_a_newly_admitted_game(monkeypatch):
     await use_case.run()
 
     assert summarize.await_count == 2  # critic + user
+
+
+async def test_enrichment_is_never_invoked_when_review_summary_generation_is_disabled(monkeypatch):
+    """FR-003/FR-010: even a brand-new game (which would otherwise always
+    qualify via the zero-base case) must not be summarized when the switch
+    is off."""
+    parsed = _parsed(1)
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.build_parsed_game", lambda resolved: parsed)
+    monkeypatch.setattr("metacritic_game_tracker.application.ingest.parser.parse_reviews", lambda html, sample_size: ["quote"])
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    summarize = AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m"))
+    use_case, session = _use_case(
+        game_repo, _ingest_state_repo(), fetch_detail=AsyncMock(return_value=_GAME_HTML), summarize=summarize,
+        config=_config(review_summary_enabled=False),
+    )
+
+    await use_case.run()
+
+    summarize.assert_not_awaited()
 
 
 async def test_initial_ingest_records_total_reviews_count_at_first_summarization(monkeypatch):

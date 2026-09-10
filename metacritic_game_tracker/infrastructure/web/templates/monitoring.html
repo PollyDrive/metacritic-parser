@@ -40,9 +40,17 @@
             {% if p.latest and p.latest.status == "running" %}
               Running…
             {% else %}
-              {{ p.latest.status if p.latest else "never run" }}
+              {{ (p.latest.status if p.latest else "never run") | capitalize }}
             {% endif %}
           </span>
+          <form method="post" action="/monitoring/toggle" class="pipeline-toggle" data-toggle-kind="{{ p.kind }}"
+                title="{{ 'Scheduled runs are on — turn off to stop them (a manual Run now still works either way)' if p.enabled else 'Scheduled runs are off — a manual Run now still works' }}">
+            <input type="hidden" name="kind" value="{{ p.kind }}">
+            <input type="hidden" name="enabled" value="{{ 'false' if p.enabled else 'true' }}">
+            <button type="submit" class="toggle-switch {{ 'is-on' if p.enabled else 'is-off' }}" aria-pressed="{{ 'true' if p.enabled else 'false' }}">
+              {{ 'On' if p.enabled else 'Off' }}
+            </button>
+          </form>
         </div>
         {% if p.latest %}
         <p class="pipeline-meta">Started {{ p.latest.started_at }}{% if p.latest.finished_at %}<br>Finished {{ p.latest.finished_at }}{% endif %}</p>

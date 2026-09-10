@@ -6,11 +6,7 @@ from __future__ import annotations
 
 EN_LABELS: dict[str, str] = {
     "ingest.enabled": "Scheduled ingestion enabled",
-    "ingest.runs_per_hour": "Runs per hour",
     "ingest.games_per_run": "Games per run",
-    "ingest.active_hours_start": "Active window start",
-    "ingest.active_hours_end": "Active window end",
-    "ingest.timezone": "Timezone (day boundary)",
     "review_refresh.interval_hours": "Review refresh cadence, hours",
     "playthrough.interval_hours": "Playthrough cadence, hours",
     "scraper.request_delay_seconds": "Delay between requests, sec",
@@ -28,6 +24,7 @@ EN_LABELS: dict[str, str] = {
     "review_refresh.mid_tier_days": "Recheck interval, games 1-4wk old (days)",
     "review_refresh.max_age_weeks": "Refresh cutoff age (weeks)",
     "review_refresh.games_per_run": "Games rechecked per run",
+    "enrichment.review_summary_enabled": "Enable review-summary generation",
 }
 
 # Explanations of why the setting is needed — one or two sentences longer than EN_LABELS,
@@ -40,25 +37,9 @@ EN_WHY: dict[str, str] = {
         "without affecting other settings — the worker will continue running, but "
         "skip scheduled runs."
     ),
-    "ingest.runs_per_hour": (
-        "How often the worker checks Metacritic for new games. Higher means "
-        "a fresher catalog, but increases load on the source and LLM budget."
-    ),
     "ingest.games_per_run": (
         "How many games are processed per run. Limits the batch "
         "load on the scraper and LLM API costs per execution."
-    ),
-    "ingest.active_hours_start": (
-        "Start of the window when scheduled ingestion is allowed. Outside "
-        "this window, the worker ticks but does not start ingestion."
-    ),
-    "ingest.active_hours_end": (
-        "End of the active window for scheduled ingestion — see 'Active "
-        "window start'."
-    ),
-    "ingest.timezone": (
-        "Timezone used to determine the day boundary — affects the "
-        "'games per day' counter and the active hours window above."
     ),
     "review_refresh.interval_hours": (
         "How often the review-refresh backfill pass runs, independent of the "
@@ -96,6 +77,13 @@ EN_WHY: dict[str, str] = {
         "Enables searching for playthroughs on YouTube and generating a takeaway "
         "for game cards. Requires a configured YOUTUBE_API_KEY in .env — without "
         "it, the playthrough pipeline will not run at all."
+    ),
+    "enrichment.review_summary_enabled": (
+        "Enables generating critic/user review summaries — both for newly-ingested "
+        "games and for the scheduled review-refresh pass. Off also stops refreshing "
+        "userscore pills, since that piggybacks on the same source-site check. A "
+        "manual 'Run now' for a specific pipeline still proceeds regardless of this "
+        "switch."
     ),
     "enrichment.youtube_daily_search_budget": (
         "Daily limit of YouTube Data API 'units' for playthrough searches (a search "

@@ -14,8 +14,8 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,12 @@ DEFAULT_POLL_INTERVAL_SECONDS = 5
 ALLOWED_POLL_INTERVALS_SECONDS = {5, 30, 60, 300}
 
 KNOWN_KINDS = ("ingest", "review_refresh", "playthrough")
+
+ENABLE_CONFIG_KEYS = {
+    "ingest": "ingest.enabled",
+    "review_refresh": "enrichment.review_summary_enabled",
+    "playthrough": "enrichment.playthrough_enabled",
+}
 
 RunState = tuple[int, str, str, str | None]
 
@@ -122,8 +128,15 @@ async def monitoring_status(
     )
     latest_result = await session.execute(latest_stmt)
     latest_by_stage = {r.stage: _format_run(r) for r in latest_result.scalars().all()}
+    config = RuntimeConfig(session)
     pipelines = [
-        {"kind": kind, "latest": latest_by_stage.get(kind), "coverage": None} for kind in KNOWN_KINDS
+        {
+            "kind": kind,
+            "latest": latest_by_stage.get(kind),
+            "coverage": None,
+            "enabled": await config.get_bool(ENABLE_CONFIG_KEYS[kind]),
+        }
+        for kind in KNOWN_KINDS
     ]
 
     history_result = await session.execute(
@@ -308,6 +321,25 @@ async def monitoring_stream(
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+@router.post("/monitoring/toggle")
+async def toggle_pipeline(
+    kind: str = Form(...),
+    enabled: str = Form(...),
+    session: AsyncSession = Depends(get_monitoring_session),
+    operator: str = Depends(require_operator),
+):
+    """Flip one pipeline's enable switch, right from its card on /monitoring —
+    the switches used to live on the generic /monitoring/config table; this
+    is their only home now."""
+    if kind not in ENABLE_CONFIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown pipeline kind: {kind}")
+
+    config = RuntimeConfig(session)
+    await config.set(ENABLE_CONFIG_KEYS[kind], enabled, updated_by=operator)
+    await session.commit()
+    return RedirectResponse(url="/monitoring", status_code=303)
+
+
 @router.post("/monitoring/run")
 async def trigger_run(
     kind: str = "ingest",
@@ -317,11 +349,10 @@ async def trigger_run(
     if kind not in KNOWN_KINDS:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline kind: {kind}")
 
-    if kind == "playthrough":
-        config = RuntimeConfig(session)
-        if not await config.get_bool("enrichment.playthrough_enabled"):
-            raise HTTPException(status_code=409, detail="Playthrough enrichment is disabled")
-
+    # A manual "Run now" always proceeds regardless of that pipeline's own
+    # enable switch (FR-009, feature 003) — the switch only gates the
+    # automatic schedule, enforced in scripts/run_scheduler.py's dispatch,
+    # not here.
     running = await session.execute(
         select(PipelineRunORM).where(PipelineRunORM.status == "running")
     )

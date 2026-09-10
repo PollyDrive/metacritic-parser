@@ -19,6 +19,7 @@ def _mock_session():
     result = MagicMock()
     result.scalars.return_value.all.return_value = []
     session.execute.return_value = result
+    session.get.return_value = MagicMock(value="true")
     return session
 
 

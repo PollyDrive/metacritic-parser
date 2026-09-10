@@ -223,10 +223,10 @@ is complete.
       platform* review count (`pick_best_platform`) against the recorded count, not a sum across
       all platforms as originally decided there — document the change and the reasoning already
       captured in `application/enrichment.py`'s module docstring
-- [ ] T021 Walk through quickstart.md's 6 scenarios manually against a running instance
+- [X] T021 Walk through quickstart.md's 6 scenarios manually against a running instance
       (`app` + `worker` both up), correcting any step that still references
       `reviews_last_checked_at` or a percentage threshold once T018-T020 land
-- [ ] T022 Full quality gate: `poetry run ruff check .`, `poetry run tach check`,
+- [X] T022 Full quality gate: `poetry run ruff check .`, `poetry run tach check`,
       `poetry run pytest tests/ -q` — all clean (Constitution Principle IV)
 
 ---

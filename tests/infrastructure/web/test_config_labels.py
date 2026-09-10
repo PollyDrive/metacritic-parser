@@ -7,14 +7,12 @@ from metacritic_game_tracker.infrastructure.web.config_labels import (
     why_for,
 )
 
-# Mirrors the seeded keys in sql/migrations/005_runtime_config.sql
+# Mirrors the seeded keys in sql/migrations/005_runtime_config.sql, minus the
+# four removed by 014_remove_unused_ingest_settings.sql (no active-hours
+# concept, cadence fixed at once/hour, day-boundary timezone hardcoded to UTC).
 SEEDED_KEYS = [
     "ingest.enabled",
-    "ingest.runs_per_hour",
     "ingest.games_per_run",
-    "ingest.active_hours_start",
-    "ingest.active_hours_end",
-    "ingest.timezone",
     "scraper.request_delay_seconds",
     "scraper.max_retries",
     "scraper.timeout_seconds",

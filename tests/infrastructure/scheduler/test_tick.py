@@ -3,21 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from metacritic_game_tracker.infrastructure.scheduler.tick import decide, stage_due
+from metacritic_game_tracker.infrastructure.scheduler.tick import decide, dispatch_due, stage_due
 
 
-def _config(enabled=True, runs_per_hour=1, start="00:00", end="24:00", tz="UTC"):
-    values = {
-        "ingest.enabled": enabled,
-        "ingest.runs_per_hour": runs_per_hour,
-        "ingest.active_hours_start": start,
-        "ingest.active_hours_end": end,
-        "ingest.timezone": tz,
-    }
+def _config(enabled=True):
+    values = {"ingest.enabled": enabled}
     config = MagicMock()
     config.get_bool = AsyncMock(side_effect=lambda k: values[k])
-    config.get_int = AsyncMock(side_effect=lambda k: values[k])
-    config.get_str = AsyncMock(side_effect=lambda k: values[k])
     return config
 
 
@@ -34,9 +26,9 @@ def _session(pending_request=None, last_finished_at=None):
     return session
 
 
-async def test_pending_run_request_runs_regardless_of_active_hours_and_enabled_flag():
+async def test_pending_run_request_runs_regardless_of_the_enabled_flag():
     session = _session(pending_request=42)
-    config = _config(enabled=False, start="09:00", end="10:00")  # disabled AND outside hours
+    config = _config(enabled=False)
 
     decision = await decide(session, config, now=datetime(2026, 1, 1, 3, 0, tzinfo=UTC))
 
@@ -55,16 +47,6 @@ async def test_disabled_master_switch_blocks_a_scheduled_run():
     assert decision.reason == "disabled"
 
 
-async def test_outside_active_hours_blocks_a_scheduled_run():
-    session = _session(pending_request=None)
-    config = _config(enabled=True, start="09:00", end="17:00")
-
-    decision = await decide(session, config, now=datetime(2026, 1, 1, 3, 0, tzinfo=UTC))
-
-    assert decision.should_run is False
-    assert decision.reason == "outside_hours"
-
-
 async def test_due_when_no_prior_run_exists():
     session = _session(pending_request=None, last_finished_at=None)
     config = _config()
@@ -78,7 +60,7 @@ async def test_due_when_no_prior_run_exists():
 async def test_not_due_yet_within_the_hourly_interval():
     last_run = datetime(2026, 1, 1, 11, 30, tzinfo=UTC)
     session = _session(pending_request=None, last_finished_at=last_run)
-    config = _config(runs_per_hour=1)
+    config = _config()
 
     decision = await decide(session, config, now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
 
@@ -91,7 +73,7 @@ async def test_a_restart_does_not_reset_the_schedule():
     (research.md §3) — a fresh process instance sees the same last-run time."""
     last_run = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     session = _session(pending_request=None, last_finished_at=last_run)
-    config = _config(runs_per_hour=1)
+    config = _config()
 
     decision = await decide(session, config, now=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
 
@@ -119,6 +101,32 @@ async def test_decides_ingest_due_ness_from_ingest_stage_runs_only():
     last_run_stmt = session.execute.call_args_list[1].args[0]
     compiled = str(last_run_stmt.compile(compile_kwargs={"literal_binds": True})).lower()
     assert "stage = 'ingest'" in compiled
+
+
+def test_dispatch_due_a_manual_trigger_proceeds_even_when_disabled_and_not_due():
+    """FR-009: an operator-initiated run of a specific pipeline proceeds
+    regardless of that pipeline's own enable setting."""
+    assert dispatch_due("playthrough", "playthrough", enabled=False, due=False) is True
+
+
+def test_dispatch_due_a_scheduled_tick_needs_both_enabled_and_due():
+    assert dispatch_due("scheduled", "review_refresh", enabled=True, due=True) is True
+    assert dispatch_due("scheduled", "review_refresh", enabled=False, due=True) is False
+    assert dispatch_due("scheduled", "review_refresh", enabled=True, due=False) is False
+    assert dispatch_due("scheduled", "review_refresh", enabled=False, due=False) is False
+
+
+def test_dispatch_due_a_manual_trigger_for_a_different_stage_does_not_fire():
+    assert dispatch_due("playthrough", "review_refresh", enabled=True, due=True) is False
+
+
+def test_dispatch_due_for_review_refresh_and_playthrough_never_depends_on_ingest():
+    """FR-002/FR-006/FR-007: discovery being off must never affect these two
+    other pipelines — dispatch_due takes each stage's own enabled/due state
+    as parameters, with no ingest-related input at all, so this holds by
+    construction rather than by incidental behavior."""
+    assert dispatch_due("scheduled", "review_refresh", enabled=True, due=True) is True
+    assert dispatch_due("scheduled", "playthrough", enabled=True, due=True) is True
 
 
 async def test_stage_due_when_the_stage_has_never_completed_a_run():

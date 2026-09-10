@@ -68,6 +68,7 @@ def test_a_leaked_api_key_in_an_enrichment_error_is_masked_in_the_errors_log(app
         last_attempt_at=datetime(2026, 1, 1, tzinfo=UTC), last_error=_LEAKY_ERROR,
     )
     session = AsyncMock()
+    session.get.return_value = MagicMock(value="true")
     session.execute.side_effect = [
         _empty_result(),  # latest-by-stage
         _empty_result(),  # run history

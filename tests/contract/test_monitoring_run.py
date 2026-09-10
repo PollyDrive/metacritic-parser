@@ -99,12 +99,16 @@ def test_post_run_rejects_an_unknown_kind(app):
     assert response.status_code == 400
 
 
-def test_post_run_rejects_playthrough_when_the_feature_is_disabled(app):
+def test_post_run_allows_playthrough_even_when_the_feature_is_disabled(app):
+    """FR-009: a manual, operator-initiated run of a pipeline proceeds
+    regardless of that pipeline's own enable switch — the worker (not this
+    route) is where the switch is actually enforced, and only for the
+    scheduled cadence."""
     session = _session(running=None, pending=None, playthrough_enabled=False)
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
 
     response = test_client.post("/monitoring/run", params={"kind": "playthrough"}, auth=AUTH)
 
-    assert response.status_code == 409
-    session.add.assert_not_called()
+    assert response.status_code == 202
+    session.add.assert_called_once()

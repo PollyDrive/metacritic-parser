@@ -78,7 +78,6 @@ class IngestGamesUseCase:
     async def run(self) -> PipelineRunORM:
         games_per_run = await self._config.get_int("ingest.games_per_run")
         max_reject_ratio = await self._config.get_float("dq.max_reject_ratio")
-        tz = await self._config.get_str("ingest.timezone")
 
         state_orm = await self._ingest_state_repo.get()
         domain_state = IngestState(
@@ -87,7 +86,7 @@ class IngestGamesUseCase:
             day_new_releases_done=state_orm.day_new_releases_done,
             see_all_next_page=state_orm.see_all_next_page,
         )
-        today = day_key(datetime.now(UTC), tz)
+        today = day_key(datetime.now(UTC), "UTC")
         domain_state = roll_over_if_new_day(domain_state, today)
         plan = plan_ingest(domain_state)
 
@@ -197,6 +196,7 @@ class IngestGamesUseCase:
         critic_n = await self._config.get_int("reviews.critic_sample_size")
         user_n = await self._config.get_int("reviews.user_sample_size")
         growth_threshold = await self._config.get_int("reviews.growth_threshold")
+        review_summary_enabled = await self._config.get_bool("enrichment.review_summary_enabled")
 
         primary_count = 0
 
@@ -223,13 +223,14 @@ class IngestGamesUseCase:
             now = datetime.now(UTC)
             refresh_due = game.next_refresh_at is not None and game.next_refresh_at <= now
 
-            needs_critic = is_new or refresh_due or not await self._has_summary(game, "critic")
-            needs_user = is_new or refresh_due or not await self._has_summary(game, "user")
+            if review_summary_enabled:
+                needs_critic = is_new or refresh_due or not await self._has_summary(game, "critic")
+                needs_user = is_new or refresh_due or not await self._has_summary(game, "user")
 
-            if needs_critic:
-                await self._try_enrich(game, "critic", critic_n, growth_threshold, run_row.id)
-            if needs_user:
-                await self._try_enrich(game, "user", user_n, growth_threshold, run_row.id)
+                if needs_critic:
+                    await self._try_enrich(game, "critic", critic_n, growth_threshold, run_row.id)
+                if needs_user:
+                    await self._try_enrich(game, "user", user_n, growth_threshold, run_row.id)
 
         new_state = advance_state(
             domain_state,

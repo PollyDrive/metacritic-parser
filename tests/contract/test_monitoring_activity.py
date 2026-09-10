@@ -74,6 +74,7 @@ def test_run_history_row_carries_its_own_events_for_the_accordion(app):
     to it, scoped by run_id, not the global activity feed."""
     run, event = _run_with_event()
     session = AsyncMock()
+    session.get.return_value = MagicMock(value="true")
     session.execute.side_effect = [
         _empty_result(),  # latest-by-stage
         _result([run]),  # run history
@@ -117,6 +118,7 @@ def test_playthrough_run_shows_youtube_calls_and_pipeline_shows_coverage(app):
         _reject(7, "budget_exhausted", item_ref="13", detail="Daily YouTube search quota exhausted"),
     ]
     session = AsyncMock()
+    session.get.return_value = MagicMock(value="true")
     session.execute.side_effect = [
         _empty_result(),  # latest-by-stage
         _result([run]),  # run history
@@ -154,6 +156,7 @@ def test_a_run_where_everything_was_deferred_reports_the_deferred_count(app):
         items_in=296, items_accepted=0, items_deferred=296, items_rejected=0, meta={},
     )
     session = AsyncMock()
+    session.get.return_value = MagicMock(value="true")
     session.execute.side_effect = [
         _empty_result(),  # latest-by-stage
         _result([run]),  # run history
@@ -177,6 +180,7 @@ def test_run_detail_page_no_longer_exists(app):
     """Superseded by the inline accordion — a separate per-run page would be a
     second, divergent way to show the same data."""
     session = AsyncMock()
+    session.get.return_value = MagicMock(value="true")
     session.execute.return_value = _empty_result()
     app.dependency_overrides[get_monitoring_session] = lambda: session
     test_client = TestClient(app)
