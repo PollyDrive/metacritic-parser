@@ -79,6 +79,12 @@ class GameRepository:
     async def get_by_id(self, game_id: int) -> GameORM | None:
         return await self._session.get(GameORM, game_id)
 
+    async def get_by_slug(self, slug: str) -> GameORM | None:
+        result = await self._session.execute(
+            select(GameORM).where(GameORM.metacritic_slug == slug)
+        )
+        return result.scalar_one_or_none()
+
     async def has_review_summary(self, game_id: int, audience: str) -> bool:
         result = await self._session.execute(
             select(ReviewSummaryORM.id).where(
