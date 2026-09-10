@@ -25,10 +25,14 @@ from metacritic_game_tracker.domain.models import PlatformScore
 from metacritic_game_tracker.infrastructure.db.repositories import GameRepository
 from metacritic_game_tracker.infrastructure.scraper.parser import ParsedGame
 
+import pytest
+
 # dotenv_values(), not load_dotenv() — reads .env into a local dict instead of
 # mutating the process environment, so this file doesn't leak DATABASE_URL/
 # OPENCODE_API_KEY/etc. into other test modules' os.environ.setdefault() calls.
 _DATABASE_URL = os.environ.get("DATABASE_URL") or dotenv_values().get("DATABASE_URL")
+
+_BASE_ID = 999999900  # dedicated test id range, never committed (session.rollback())
 
 
 def _parsed() -> ParsedGame:
@@ -46,6 +50,7 @@ def _parsed() -> ParsedGame:
     )
 
 
+@pytest.mark.skipif(not _DATABASE_URL, reason="DATABASE_URL not set (e.g. in CI)")
 async def test_upsert_platform_scores_does_not_crash_for_a_brand_new_game():
     engine = create_async_engine(_DATABASE_URL)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)

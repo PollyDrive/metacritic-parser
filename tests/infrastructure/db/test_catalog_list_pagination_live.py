@@ -20,9 +20,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from metacritic_game_tracker.infrastructure.db.models import GameORM, PlatformScoreORM
 from metacritic_game_tracker.infrastructure.db.repositories import GameRepository
 
+import pytest
+
 _DATABASE_URL = os.environ.get("DATABASE_URL") or dotenv_values().get("DATABASE_URL")
 
 _BASE_ID = 999999800  # dedicated test id range, never committed (session.rollback())
+
+
+@pytest.mark.skipif(not _DATABASE_URL, reason="DATABASE_URL not set (e.g. in CI)")
 
 
 async def test_list_sorted_by_rating_returns_the_full_page_even_with_multi_platform_games():
@@ -59,6 +64,7 @@ async def test_list_sorted_by_rating_returns_the_full_page_even_with_multi_platf
         await engine.dispose()
 
 
+@pytest.mark.skipif(not _DATABASE_URL, reason="DATABASE_URL not set (e.g. in CI)")
 async def test_list_sorted_by_rating_combined_with_a_platform_filter_does_not_double_join():
     """Regression: the sort=rating branch used to always add its own
     outerjoin(PlatformScoreORM) even when the platform filter above had
