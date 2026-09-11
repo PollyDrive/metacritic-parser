@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from metacritic_game_tracker.domain.rules import IngestState
@@ -140,7 +140,13 @@ class GameRepository:
                 func.max(PlatformScoreORM.metascore).desc().nulls_last(), GameORM.id.desc()
             )
         else:
-            stmt = stmt.order_by(GameORM.release_date.desc().nulls_last(), GameORM.id.desc())
+            # A future release_date (an announced/unreleased title) must not
+            # outrank an actually-recent release just because it's a larger
+            # date value — rank it like an unknown release_date instead
+            # (sinks to the bottom via nulls_last), not "the newest thing".
+            today = datetime.now(UTC).date()
+            released_date = case((GameORM.release_date <= today, GameORM.release_date), else_=None)
+            stmt = stmt.order_by(released_date.desc().nulls_last(), GameORM.id.desc())
 
         stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
