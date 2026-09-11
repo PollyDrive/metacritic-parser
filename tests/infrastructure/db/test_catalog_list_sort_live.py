@@ -12,7 +12,7 @@ the bug is in what column the SQL orders by, not in application logic.
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from dotenv import dotenv_values
@@ -68,6 +68,55 @@ async def test_default_sort_orders_by_release_date_not_insertion_order():
             titles = [g.title for g in games if g.metacritic_id in (_BASE_ID, _BASE_ID + 1)]
 
             assert titles == ["Sort Default New Release", "Sort Default Old Release"]
+
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.skipif(not _DATABASE_URL, reason="DATABASE_URL not set (e.g. in CI)")
+async def test_default_sort_does_not_let_an_unreleased_announcement_outrank_an_actual_release():
+    """Real bug reported live: 'Newest' surfaced unreleased/announced titles
+    (future release_date, e.g. a sequel with no reviews yet) above games
+    that had actually just come out — release_date.desc() alone treats
+    'furthest in the future' as 'newest', which is backwards for a listing
+    meant to show what's actually playable and recently out. A future
+    release_date must rank like an unknown one (sink to the bottom), not
+    outrank a real recent release."""
+    engine = create_async_engine(_DATABASE_URL)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            now = datetime.now(UTC)
+            today = now.date()
+            unreleased_announcement = GameORM(
+                metacritic_id=_BASE_ID + 2,
+                metacritic_slug="sort-default-unreleased-announcement",
+                title="Sort Default Unreleased Announcement",
+                genres=[],
+                release_date=today + timedelta(days=180),
+                first_seen_at=now,
+                last_updated_at=now,
+            )
+            just_released = GameORM(
+                metacritic_id=_BASE_ID + 3,
+                metacritic_slug="sort-default-just-released",
+                title="Sort Default Just Released",
+                genres=[],
+                release_date=today,
+                first_seen_at=now,
+                last_updated_at=now,
+            )
+            session.add(unreleased_announcement)
+            await session.flush()
+            session.add(just_released)
+            await session.flush()
+
+            repo = GameRepository(session)
+            games = await repo.list(sort="default", limit=100000, offset=0)
+            titles = [g.title for g in games if g.metacritic_id in (_BASE_ID + 2, _BASE_ID + 3)]
+
+            assert titles == ["Sort Default Just Released", "Sort Default Unreleased Announcement"]
 
             await session.rollback()
     finally:
