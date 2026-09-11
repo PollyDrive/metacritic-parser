@@ -140,7 +140,7 @@ class GameRepository:
                 func.max(PlatformScoreORM.metascore).desc().nulls_last(), GameORM.id.desc()
             )
         else:
-            stmt = stmt.order_by(GameORM.id.desc())
+            stmt = stmt.order_by(GameORM.release_date.desc().nulls_last(), GameORM.id.desc())
 
         stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
