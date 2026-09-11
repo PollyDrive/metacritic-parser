@@ -104,7 +104,12 @@ class IngestGamesUseCase:
             stubs = await self._fetch_listing(source)
         else:
             source = NewReleasesSource()
-            stubs = new_release_stubs
+            # Only the not-yet-known ones — already-known games here have
+            # their own freshness mechanism (review_refresh's Decayed TTL,
+            # detail_backfill); re-fetching/re-upserting all ~20 New
+            # Releases slugs every tick just because one was new wasted a
+            # scrape per game per run on data nothing here actually needed.
+            stubs = unseen_stubs
 
         run_row = PipelineRunORM(
             stage="ingest",
