@@ -509,3 +509,66 @@ async def test_stays_on_new_releases_and_leaves_see_all_cursor_untouched_when_so
     assert run_row.source == "new_releases"
     new_state = ingest_state_repo.advance.await_args.args[0]
     assert new_state.see_all_next_page == 3
+
+
+async def test_only_processes_the_unseen_stubs_from_new_releases_not_the_whole_page(monkeypatch):
+    """Real bug: New Releases barely changes hour to hour — most of its ~20
+    slugs are already known. When even one is unseen, the run stayed on
+    NewReleasesSource (correct) but then processed `new_release_stubs`
+    (the whole page) instead of `unseen_stubs` (just the new one(s)),
+    re-fetching and re-upserting the same ~19 already-known games every
+    single tick — confirmed live via game_activity_events: the same game_ids
+    logging `ingest_update` across 20+ consecutive runs. Already-known games
+    have their own freshness mechanism (review_refresh's Decayed TTL,
+    detail_backfill) — ingest's own job here is only to pick up what's new."""
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.get_resolved_game",
+        lambda html: {"id": 1, "title": "G", "slug": "g", "description": "d", "platforms": [], "criticScoreSummary": {}},
+    )
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.build_parsed_game",
+        lambda resolved: _parsed(1),
+    )
+    monkeypatch.setattr(
+        "metacritic_game_tracker.application.ingest.parser.parse_reviews", lambda html, sample_size: ["quote"]
+    )
+
+    async def mixed_new_releases(source):
+        from metacritic_game_tracker.domain.rules import NewReleasesSource
+
+        assert isinstance(source, NewReleasesSource)
+        return [
+            GameStub(metacritic_slug="already-known-1", metacritic_id=None),
+            GameStub(metacritic_slug="fresh-game", metacritic_id=None),
+            GameStub(metacritic_slug="already-known-2", metacritic_id=None),
+        ]
+
+    game_orm = GameORM(id=1, metacritic_id=1, metacritic_slug="game-1", title="Game 1", genres=["Action"])
+    game_repo = MagicMock()
+    game_repo.filter_known_slugs = AsyncMock(return_value={"already-known-1", "already-known-2"})
+    game_repo.upsert = AsyncMock(return_value=(game_orm, True))
+    game_repo.upsert_platform_scores = AsyncMock()
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = _mock_session_execute()
+
+    use_case = IngestGamesUseCase(
+        session=session,
+        config=_config(),
+        ingest_state_repo=_fixed_cursor_ingest_state_repo(see_all_next_page=3),
+        game_repo=game_repo,
+        fetch_listing=mixed_new_releases,
+        fetch_detail=AsyncMock(return_value=_GAME_HTML),
+        fetch_reviews=AsyncMock(return_value="<html>reviews</html>"),
+        fetch_review_json=AsyncMock(
+            return_value='{"data": {"totalResults": 1, "items": [{"quote": "q"}]}}'
+        ),
+        summarize=AsyncMock(return_value=MagicMock(summary_text="x", input_tokens=1, output_tokens=1, model="m")),
+    )
+
+    run_row = await use_case.run()
+
+    assert run_row.source == "new_releases"
+    assert run_row.items_in == 1  # only fresh-game — the two already-known stubs were never fetched
+    game_repo.upsert.assert_awaited_once()
