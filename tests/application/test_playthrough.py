@@ -173,6 +173,43 @@ async def test_falls_back_to_the_next_ranked_candidate_when_the_top_one_has_no_t
     assert "second" in takeaway.video_url
 
 
+async def test_waits_the_configured_delay_before_every_transcript_fetch_attempt(mock_session):
+    """Real bug: the politeness cooldown only fired between retries within a
+    single game, so the very first fetch of every game (the overwhelming
+    majority of requests) went out with zero delay — a burst pattern that
+    trips YouTube's RequestBlocked/IpBlocked rate limiting even from a
+    residential IP, not just datacenter ones."""
+    first = VideoCandidate(
+        video_id="first", title="First result", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
+    )
+    second = VideoCandidate(
+        video_id="second", title="Second result", view_count=500,
+        has_captions=True, duration_seconds=600, description="",
+    )
+
+    async def search_videos(query: str):
+        return [first, second]
+
+    get_transcript = AsyncMock(side_effect=[None, "raw transcript text"])
+    llm_call = AsyncMock(return_value=("Great open world, tough bosses.", 500, 100, "claude-haiku-4-5"))
+    sleep = AsyncMock()
+
+    use_case = FindPlaythroughTakeawayUseCase(
+        session=mock_session,
+        budget=_budget(),
+        search_videos=search_videos,
+        get_transcript=get_transcript,
+        llm_call=llm_call,
+        transcript_delay_seconds=2.5,
+        sleep=sleep,
+    )
+
+    await use_case.run(_game())
+
+    assert sleep.await_args_list == [((2.5,),), ((2.5,),)]
+
+
 async def test_persists_a_takeaway_and_an_llm_call_when_a_video_is_found(mock_session):
     candidate = VideoCandidate(
         video_id="abc123", title="Elden Ring Playthrough", view_count=99999,
