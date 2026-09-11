@@ -47,5 +47,5 @@ def rank_playthrough_candidates(candidates: list[VideoCandidate]) -> list[VideoC
 async def find_playthrough_candidates(
     game_title: str, search_videos: SearchVideos
 ) -> list[VideoCandidate]:
-    candidates = await search_videos(f'"{game_title}" game review')
+    candidates = await search_videos(f'"{game_title}" review')
     return rank_playthrough_candidates(candidates)

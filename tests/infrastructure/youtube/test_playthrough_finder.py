@@ -82,7 +82,12 @@ async def test_find_playthrough_candidates_returns_the_ranked_list_from_search()
 
 async def test_find_playthrough_candidates_searches_for_a_review_not_a_playthrough():
     """Review-style content is far more likely to carry real closed captions
-    than a raw longplay VOD."""
+    than a raw longplay VOD. The exact title is quoted so a game with a
+    generic or reused name doesn't pull in videos about something else that
+    happens to rank well for the bare words — garbage-filtering the rest
+    (unrelated genre, wrong game) is what infrastructure/youtube/
+    youtube_client.py's videoCategoryId=20 (Gaming) restriction is for,
+    since that's an API-call concern this fake can't express."""
     queries = []
 
     async def search_videos(query: str):
@@ -91,7 +96,7 @@ async def test_find_playthrough_candidates_searches_for_a_review_not_a_playthrou
 
     await find_playthrough_candidates("Elden Ring", search_videos)
 
-    assert queries == ["Elden Ring review"]
+    assert queries == ['"Elden Ring" review']
 
 
 async def test_find_playthrough_candidates_returns_empty_when_no_candidates_are_found():

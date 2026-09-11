@@ -39,6 +39,11 @@ from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import Vi
 _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 _MAX_RESULTS = 10
+# YouTube's own "Gaming" category — the query text alone (quoted title +
+# "review") still ranks in reaction videos, news/announcement clips, and
+# "top 10 games like X" listicles that happen to say the title; restricting
+# to this category is a real API-side filter the query text can't express.
+_GAMING_CATEGORY_ID = "20"
 
 # YouTube video durations never carry a years/months/days component (the API
 # caps a single upload's length well under a day) — just PT#H#M#S, any part optional.
@@ -62,6 +67,7 @@ async def search_videos(
             "part": "snippet",
             "q": query,
             "type": "video",
+            "videoCategoryId": _GAMING_CATEGORY_ID,
             "videoDuration": "medium",
             "videoCaption": "closedCaption",
             "maxResults": _MAX_RESULTS,
