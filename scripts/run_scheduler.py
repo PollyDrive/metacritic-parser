@@ -209,6 +209,7 @@ async def _run_playthrough(session, http_client: httpx.AsyncClient) -> PipelineR
     without a YouTube API key (or one that hasn't opted in) gets no
     *scheduled* run at all, but an explicit manual "Run now" still runs it."""
     config = RuntimeConfig(session)
+    transcript_delay = await config.get_float("enrichment.youtube_transcript_delay_seconds")
 
     async def llm_call(route, prompt):
         return await call_llm(route, prompt, http_client)
@@ -223,6 +224,7 @@ async def _run_playthrough(session, http_client: httpx.AsyncClient) -> PipelineR
             get_transcript=yt_get_transcript,
             llm_call=llm_call,
             get_cost_usd=lambda model, i, o: get_cost_usd(session, model, i, o),
+            transcript_delay_seconds=transcript_delay,
         )
         return await playthrough_use_case.run(game, run_id=run_id)
 

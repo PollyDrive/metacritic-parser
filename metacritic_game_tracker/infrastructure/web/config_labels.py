@@ -25,6 +25,7 @@ EN_LABELS: dict[str, str] = {
     "review_refresh.max_age_weeks": "Refresh cutoff age (weeks)",
     "review_refresh.games_per_run": "Games rechecked per run",
     "enrichment.review_summary_enabled": "Enable review-summary generation",
+    "enrichment.youtube_transcript_delay_seconds": "Delay before each transcript fetch, sec",
 }
 
 # Explanations of why the setting is needed — one or two sentences longer than EN_LABELS,
@@ -89,6 +90,13 @@ EN_WHY: dict[str, str] = {
         "Daily limit of YouTube Data API 'units' for playthrough searches (a search "
         "costs 100 units per request). Protects the free Google quota from "
         "exhaustion during the day."
+    ),
+    "enrichment.youtube_transcript_delay_seconds": (
+        "Pause before every transcript fetch attempt (once per ranked candidate, "
+        "per game) — this is separate from the search quota above and doesn't "
+        "spend it. A residential IP hit the same RequestBlocked/IpBlocked error "
+        "the VPS did, which points at request-burst rate limiting rather than "
+        "datacenter-IP reputation alone — do not set to 0."
     ),
     "backfill.max_attempts": (
         "How many times to retry an enrichment attempt (review summary or "

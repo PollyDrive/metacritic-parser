@@ -6,6 +6,7 @@ findable playthrough is a normal outcome, not an error (data-model.md).
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -37,13 +38,25 @@ async def _zero_cost(model: str, input_tokens: int, output_tokens: int) -> Decim
 
 
 class FindPlaythroughTakeawayUseCase:
-    def __init__(self, session, budget, search_videos, get_transcript, llm_call, get_cost_usd=None):
+    def __init__(
+        self,
+        session,
+        budget,
+        search_videos,
+        get_transcript,
+        llm_call,
+        get_cost_usd=None,
+        transcript_delay_seconds: float = 0.0,
+        sleep=None,
+    ):
         self._session = session
         self._budget = budget
         self._search_videos = search_videos
         self._get_transcript = get_transcript
         self._llm_call = llm_call
         self._get_cost_usd = get_cost_usd or _zero_cost
+        self._transcript_delay_seconds = transcript_delay_seconds
+        self._sleep = sleep or asyncio.sleep
 
     async def run(self, game, run_id: int | None = None) -> bool:
         today = datetime.now(UTC).date()
@@ -74,15 +87,15 @@ class FindPlaythroughTakeawayUseCase:
         candidate = None
         transcript = None
         for attempt in ranked_candidates:
+            # Delay before every attempt, not just retries — a burst of
+            # first-attempt fetches is itself what trips YouTube's
+            # anti-scraping rate limiting (research.md §6 revision).
+            await self._sleep(self._transcript_delay_seconds)
+
             transcript = await self._get_transcript(attempt.video_id)
             if transcript:
                 candidate = attempt
                 break
-
-            # Cooldown to avoid tripping YouTube's anti-scraping rate limits
-            # when falling back through multiple candidates.
-            import asyncio
-            await asyncio.sleep(2)
 
         if candidate is None:
             self._session.add(
