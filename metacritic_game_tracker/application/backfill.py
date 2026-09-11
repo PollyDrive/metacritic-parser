@@ -32,11 +32,17 @@ _STEP_AUDIENCE = {"critic_summary": "critic", "user_summary": "user"}
 
 
 class RunBudgetExhausted(Exception):
-    """A do_work callable raises this to signal a run-wide resource limit hit
-    (e.g. playthrough's daily YouTube search quota) — distinct from a
-    per-game failure: `run()` stops iterating immediately and records exactly
-    ONE pipeline_rejects row, instead of every remaining game silently
-    returning nothing with zero trace in the Errors Log."""
+    """A do_work callable raises this to signal a run-wide condition (e.g.
+    playthrough's daily YouTube search quota running out, or YouTube
+    blocking this server's IP) — distinct from a per-game failure: `run()`
+    stops iterating immediately and records exactly ONE pipeline_rejects
+    row, instead of every remaining game silently returning nothing with
+    zero trace in the Errors Log (or, worse, each one individually retrying
+    into the same still-active condition)."""
+
+    def __init__(self, message: str, reason_code: str = "budget_exhausted"):
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 @dataclass
@@ -235,7 +241,7 @@ class BackfillEnrichmentUseCase:
                             stage=stage,
                             run_id=run_row.id,
                             item_ref=str(game.id),
-                            reason_code="budget_exhausted",
+                            reason_code=exc.reason_code,
                             reason_detail=str(exc),
                             created_at=datetime.now(UTC),
                         )

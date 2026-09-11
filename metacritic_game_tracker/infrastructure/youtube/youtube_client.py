@@ -27,6 +27,7 @@ from youtube_transcript_api._errors import (
     InvalidVideoId,
     NoTranscriptFound,
     NotTranslatable,
+    RequestBlocked,
     TranscriptsDisabled,
     TranslationLanguageNotAvailable,
     VideoUnavailable,
@@ -38,6 +39,11 @@ from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import Vi
 _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 _MAX_RESULTS = 10
+# YouTube's own "Gaming" category — the query text alone (quoted title +
+# "review") still ranks in reaction videos, news/announcement clips, and
+# "top 10 games like X" listicles that happen to say the title; restricting
+# to this category is a real API-side filter the query text can't express.
+_GAMING_CATEGORY_ID = "20"
 
 # YouTube video durations never carry a years/months/days component (the API
 # caps a single upload's length well under a day) — just PT#H#M#S, any part optional.
@@ -61,6 +67,7 @@ async def search_videos(
             "part": "snippet",
             "q": query,
             "type": "video",
+            "videoCategoryId": _GAMING_CATEGORY_ID,
             "videoDuration": "medium",
             "videoCaption": "closedCaption",
             "maxResults": _MAX_RESULTS,
@@ -125,6 +132,13 @@ def _find_english_transcript(video_id: str):
 # library run from server infra) — those must propagate as real errors so
 # the caller's existing retry/backoff handles them, instead of permanently
 # abandoning a video that may well have real captions.
+class TranscriptAccessBlocked(Exception):
+    """Wraps youtube_transcript_api's RequestBlocked/IpBlocked — an IP-wide
+    condition, not a per-video one, so the caller must treat it as a
+    run-wide stop signal (FindPlaythroughTakeawayUseCase.run) rather than a
+    per-game retry/backoff case."""
+
+
 _NO_TRANSCRIPT_EXCEPTIONS = (
     NoTranscriptFound,
     TranscriptsDisabled,
@@ -146,6 +160,11 @@ def _fetch_transcript_sync(video_id: str) -> str | None:
         # emailing here inverted FR-030, paging on routine misses while a real
         # source-structure break (Gate A) sent nothing.
         return None
+    except RequestBlocked as exc:
+        # Also catches IpBlocked (RequestBlocked subclass) — an IP-wide
+        # condition, not this-video-specific, so the application layer must
+        # not treat it like a normal per-video miss.
+        raise TranscriptAccessBlocked(str(exc)) from exc
     return " ".join(snippet.text for snippet in transcript.snippets)
 
 

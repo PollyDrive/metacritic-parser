@@ -7,6 +7,7 @@ from metacritic_game_tracker.application.backfill import RunBudgetExhausted
 from metacritic_game_tracker.application.playthrough import FindPlaythroughTakeawayUseCase
 from metacritic_game_tracker.infrastructure.db.models import GameORM, PipelineRejectORM
 from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import VideoCandidate
+from metacritic_game_tracker.infrastructure.youtube.youtube_client import TranscriptAccessBlocked
 
 
 def _reject_rows(mock_session):
@@ -208,6 +209,51 @@ async def test_waits_the_configured_delay_before_every_transcript_fetch_attempt(
     await use_case.run(_game())
 
     assert sleep.await_args_list == [((2.5,),), ((2.5,),)]
+
+
+async def test_stops_the_whole_run_instead_of_burning_through_every_remaining_candidate_when_youtube_blocks_it(mock_session):
+    """Real bug: RequestBlocked/IpBlocked is an IP-wide condition, not a
+    per-video one — once it happens, every other candidate (this game's and
+    every later game's) is about to fail the exact same way. The old code
+    let this propagate as a bare exception, which BackfillEnrichmentUseCase
+    treated as one more per-game retrying/backoff case and kept grinding
+    through the rest of the run, multiplying the very request volume that
+    caused the block in the first place. This must behave like the daily
+    quota running out: stop the whole run immediately via RunBudgetExhausted."""
+    first = VideoCandidate(
+        video_id="first", title="First result", view_count=99999,
+        has_captions=True, duration_seconds=600, description="",
+    )
+    second = VideoCandidate(
+        video_id="second", title="Second result", view_count=500,
+        has_captions=True, duration_seconds=600, description="",
+    )
+
+    async def search_videos(query: str):
+        return [first, second]
+
+    get_transcript = AsyncMock(side_effect=TranscriptAccessBlocked("IP blocked"))
+    llm_call = AsyncMock()
+
+    use_case = FindPlaythroughTakeawayUseCase(
+        session=mock_session,
+        budget=_budget(),
+        search_videos=search_videos,
+        get_transcript=get_transcript,
+        llm_call=llm_call,
+        sleep=AsyncMock(),
+    )
+
+    try:
+        await use_case.run(_game())
+        raise AssertionError("expected RunBudgetExhausted")
+    except RunBudgetExhausted as exc:
+        assert exc.reason_code == "youtube_blocked"
+
+    # Stops at the first block — never tries the second ranked candidate,
+    # which would just burn one more blocked request.
+    assert get_transcript.await_count == 1
+    llm_call.assert_not_awaited()
 
 
 async def test_persists_a_takeaway_and_an_llm_call_when_a_video_is_found(mock_session):

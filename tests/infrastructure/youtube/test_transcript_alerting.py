@@ -33,13 +33,14 @@ def test_a_blocked_request_is_not_swallowed_as_no_transcript(monkeypatch):
     `CouldNotRetrieveTranscript` base as 'genuinely no captions track
     exists'. Catching the base class treated every such block as a normal
     'no transcript' and abandoned the game permanently — for a video that
-    may well have real captions. Must propagate instead, so the caller's
-    existing retry/backoff (application/backfill.py's process_game_step)
-    handles it rather than a mislabeled permanent skip."""
+    may well have real captions. Must propagate (wrapped as
+    TranscriptAccessBlocked, an IP-wide condition) instead, so the caller
+    (application/playthrough.py) can stop the whole run rather than a
+    mislabeled permanent per-video skip."""
     def blocked(video_id):
         raise RequestBlocked(video_id)
 
     monkeypatch.setattr(youtube_client, "_find_english_transcript", blocked)
 
-    with pytest.raises(RequestBlocked):
+    with pytest.raises(youtube_client.TranscriptAccessBlocked):
         youtube_client._fetch_transcript_sync("abc123")

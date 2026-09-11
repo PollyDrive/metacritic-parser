@@ -76,7 +76,7 @@ class ReviewEnrichmentUseCase:
         self, game: GameORM, audience: str, sample_size: int, growth_threshold: int = 1,
         run_id: int | None = None, recent_tier_days: int = 3, mid_tier_days: int = 7,
         max_age_weeks: int = 4,
-    ) -> None:
+    ) -> bool | None:
         """Fetch (if due), summarize, and upsert a review summary, pushing the
         TTL forward only once a replacement is actually ready. Never deletes
         the existing row up front — an empty or failed fetch must leave a
@@ -120,6 +120,13 @@ class ReviewEnrichmentUseCase:
             )
             return
         if not quotes:
+            if pick is not None and pick.best_review_count == 0:
+                # Confirmed permanent by the same stats API call that triggered
+                # this attempt — not a transient extraction failure. Abandon
+                # now (like playthrough's "no candidate video") instead of
+                # burning backfill.max_attempts retries with backoff against a
+                # condition that will never change.
+                return False
             raise ValueError(f"No {audience} reviews found")
 
         try:
