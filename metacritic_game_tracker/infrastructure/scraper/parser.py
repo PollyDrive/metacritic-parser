@@ -23,6 +23,24 @@ _GAME_ANCHOR_RE = re.compile(r'<a\b([^>]*?)href="/game/([a-z0-9-]+)/"', re.IGNOR
 # same handful of games on every single run, forever.
 _CHROME_ANCHOR_MARKER = "c-site-header"
 
+# The /game/ homepage is several independent carousels on one page — New
+# Releases, Upcoming Games (unreleased, tbd scores), Best Games on <platform>
+# (all-time top, not new), New on PlayStation Plus/Xbox Game Pass (subscription
+# promos) — each glued on by frontend markup, not by us. Every carousel's own
+# container carries a stable aria-label="<Section Name> content" marker
+# (individual cards also carry their own per-item aria-label, e.g. "Metascore
+# 68 out of 100" — the " content" suffix is what distinguishes a SECTION
+# boundary from those). Real bug this fixes: grabbing every /game/ href on the
+# page mixed unreleased/unrelated titles into what the ingest pipeline treated
+# as "new releases" (85 links on a real fetch vs. the ~20 actually in New
+# Releases) — that's how an unreleased sequel with a future release_date ended
+# up in the catalog. Absent on the "See All" listing page (a flat grid, not a
+# carousel), where this simply doesn't match and the whole page is scanned as
+# before.
+_NEW_RELEASES_SECTION_RE = re.compile(
+    r'aria-label="New Releases content".*?(?=aria-label="[^"]* content"|\Z)', re.DOTALL
+)
+
 
 @dataclass(frozen=True)
 class ParsedGame:
@@ -166,9 +184,12 @@ def list_games(html: str) -> list[GameStub]:
     """Extract candidate games from a "New Releases" or "See All" listing page
     (research.md §9.1). Falls back to anchor-tag parsing when the listing page's
     payload doesn't carry a structured game array in the form we expect."""
+    section_match = _NEW_RELEASES_SECTION_RE.search(html)
+    scope = section_match.group(0) if section_match else html
+
     slugs: list[str] = []
     seen: set[str] = set()
-    for match in _GAME_ANCHOR_RE.finditer(html):
+    for match in _GAME_ANCHOR_RE.finditer(scope):
         if _CHROME_ANCHOR_MARKER in match.group(1):
             continue
         slug = match.group(2)

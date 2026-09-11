@@ -44,3 +44,29 @@ def test_site_header_navigation_links_are_not_mistaken_for_listing_results():
     </main>
     """
     assert [s.metacritic_slug for s in list_games(html)] == ["deep-cut"]
+
+
+def test_only_extracts_from_the_new_releases_carousel_not_every_module_on_the_page():
+    """Real bug, caught live: the actual /game/ homepage is several independent
+    carousels glued onto one page — New Releases, Upcoming Games (unreleased,
+    tbd scores), Best Games on <platform> (all-time top, not new), New on
+    PlayStation Plus/Xbox Game Pass (subscription promos). Grabbing every
+    /game/ href on the page (85 on a real fetch) mixed unreleased/unrelated
+    titles into what the ingest pipeline treats as "new releases" — that's
+    how an unreleased sequel with a future release_date ended up in the
+    catalog. Each carousel's own container carries a stable
+    aria-label="<Section Name> content" marker; only the New Releases one
+    should ever contribute stubs."""
+    html = """
+    <div aria-label="New Releases content">
+      <a href="/game/nhl-27/" aria-label="Metascore 68 out of 100">NHL 27</a>
+      <a href="/game/welcome-to-elderfield/">Welcome to Elderfield</a>
+    </div>
+    <div aria-label="Upcoming Games content">
+      <a href="/game/marvels-wolverine/">Marvel's Wolverine</a>
+    </div>
+    <div aria-label="Best Games on PS5 content">
+      <a href="/game/elden-ring/">Elden Ring</a>
+    </div>
+    """
+    assert [s.metacritic_slug for s in list_games(html)] == ["nhl-27", "welcome-to-elderfield"]
