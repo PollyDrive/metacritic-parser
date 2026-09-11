@@ -21,6 +21,7 @@ from metacritic_game_tracker.infrastructure.youtube.playthrough_finder import (
     SEARCH_COST_UNITS,
     find_playthrough_candidates,
 )
+from metacritic_game_tracker.infrastructure.youtube.youtube_client import TranscriptAccessBlocked
 from metacritic_game_tracker.shared.guardrail import sanitize_input, truncate_to_limit
 from metacritic_game_tracker.shared.llm_config import REASONING_ROUTE
 
@@ -92,7 +93,18 @@ class FindPlaythroughTakeawayUseCase:
             # anti-scraping rate limiting (research.md §6 revision).
             await self._sleep(self._transcript_delay_seconds)
 
-            transcript = await self._get_transcript(attempt.video_id)
+            try:
+                transcript = await self._get_transcript(attempt.video_id)
+            except TranscriptAccessBlocked as exc:
+                # An IP-wide condition, not specific to this video or this
+                # game — every other candidate (this game's remaining ones,
+                # and every later game this run) is about to fail the exact
+                # same way. Stop the whole run now instead of grinding
+                # through the rest and multiplying the request volume that
+                # caused the block in the first place.
+                raise RunBudgetExhausted(
+                    f"YouTube blocked the request: {exc}", reason_code="youtube_blocked"
+                ) from exc
             if transcript:
                 candidate = attempt
                 break

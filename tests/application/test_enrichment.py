@@ -402,17 +402,48 @@ async def test_updates_an_existing_summary_in_place_without_deleting_it_first():
     assert "ReviewSummaryORM" not in added_types  # mutated existing row, not a new one
 
 
-async def test_leaves_an_existing_summary_untouched_when_no_reviews_are_found():
-    """The exact bug this fixes: an empty fetch must never wipe a working
-    summary. run() raises instead of silently returning — that's what lets
-    BackfillEnrichmentUseCase.process_game_step apply its own
-    retry/backoff/abandon tracking to a game whose reviews are genuinely
-    always empty, instead of hammering it forever with no record of it."""
+async def test_returns_false_without_retrying_when_the_stats_api_confirms_zero_reviews():
+    """Real bug: a game the stats API itself reports has 0 reviews for this
+    audience (pick.best_review_count == 0) used to raise, and
+    BackfillEnrichmentUseCase.process_game_step retried it with exponential
+    backoff for up to backfill.max_attempts runs (hours) before finally
+    abandoning it — wasted effort against a condition confirmed permanent by
+    the same API call that triggered the attempt. Must behave like
+    playthrough's "no candidate video": produced=False, abandoned on this
+    very first attempt, no backoff cycle."""
     existing = _summary_row()
     session = _session_with_existing(existing)
     summarize = AsyncMock()
     use_case = ReviewEnrichmentUseCase(
         session, AsyncMock(), summarize, fetch_review_json=_fetch_json_for(0, [])
+    )
+
+    game = _game()
+    produced = await use_case.run(game, "critic", sample_size=50, growth_threshold=1)
+
+    assert produced is False
+    assert existing.summary_text == "old"
+    summarize.assert_not_awaited()
+    session.add.assert_not_called()
+
+
+async def test_raises_when_quotes_come_back_empty_despite_a_nonzero_review_count():
+    """Distinct from the permanent-zero case above: the stats sweep says
+    reviews exist (best_review_count > 0), but the sample pull itself came
+    back empty — a real extraction failure, not a confirmed-empty audience.
+    This must still raise so BackfillEnrichmentUseCase retries it with
+    backoff instead of silently giving up on a possibly-transient bug."""
+    existing = _summary_row()
+    session = _session_with_existing(existing)
+    summarize = AsyncMock()
+
+    async def fetch_json(url):
+        if "/stats/web" in url:
+            return _stats_json(5)
+        return _review_json(5, [])  # stats says 5 reviews, sample pull returns none
+
+    use_case = ReviewEnrichmentUseCase(
+        session, AsyncMock(), summarize, fetch_review_json=fetch_json
     )
 
     game = _game()
@@ -422,7 +453,6 @@ async def test_leaves_an_existing_summary_untouched_when_no_reviews_are_found():
     assert existing.summary_text == "old"
     summarize.assert_not_awaited()
     session.add.assert_not_called()
-    assert game.next_refresh_at is None  # not pushed forward on a no-op recheck
 
 
 async def test_records_a_failed_llm_call_when_summarization_raises():

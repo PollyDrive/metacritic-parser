@@ -35,9 +35,11 @@ from metacritic_game_tracker.infrastructure.web.auth import require_operator
 router = APIRouter()
 
 # A YouTube search actually happened iff the daily budget check passed —
-# these are the two outcomes reachable only past that check (playthrough.py).
-# "budget_exhausted" is NOT in this set: that reject fires *before* any search.
-_SEARCH_ATTEMPTED_REASON_CODES = ("no_candidate_video", "no_transcript")
+# these are the outcomes reachable only past that check (playthrough.py).
+# "budget_exhausted" is NOT in this set: that reject fires *before* any
+# search. "youtube_blocked" IS: it fires during transcript fetch, which only
+# happens after a search already found ranked candidates.
+_SEARCH_ATTEMPTED_REASON_CODES = ("no_candidate_video", "no_transcript", "youtube_blocked")
 
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 ALLOWED_POLL_INTERVALS_SECONDS = {5, 30, 60, 300}

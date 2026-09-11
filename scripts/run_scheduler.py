@@ -188,7 +188,7 @@ async def _run_review_refresh(session, http_client: httpx.AsyncClient) -> None:
         is_critic = step == "critic_summary"
         audience = "critic" if is_critic else "user"
         sample_size = critic_n if is_critic else user_n
-        await review_use_case.run(
+        return await review_use_case.run(
             game, audience, sample_size=sample_size, growth_threshold=growth_threshold, run_id=run_id,
             recent_tier_days=recent_tier_days, mid_tier_days=mid_tier_days, max_age_weeks=max_age_weeks,
         )
